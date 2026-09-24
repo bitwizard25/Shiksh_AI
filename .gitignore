@@ -6,3 +6,6 @@ bin/
 *.exe
 *.test
 coverage.out
+
+# agent worktrees created by the Claude Code harness
+.claude/worktrees/
