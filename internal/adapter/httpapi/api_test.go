@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,11 +25,15 @@ import (
 type captureMailer struct {
 	mu   sync.Mutex
 	sent []usecase.Message
+	fail error // when set, Send returns this instead of capturing the message
 }
 
 func (c *captureMailer) Send(_ context.Context, m usecase.Message) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
 	c.sent = append(c.sent, m)
 	return nil
 }
@@ -255,6 +260,43 @@ func TestPasswordResetOverHTTP(t *testing.T) {
 	before := s.mailer.count()
 	if code := s.do(t, "POST", "/v1/auth/password/forgot", "", map[string]string{"email": "nobody@example.com"}, nil); code != 202 || s.mailer.count() != before {
 		t.Fatalf("forgot for unknown email = %d, mails %d -> %d", code, before, s.mailer.count())
+	}
+}
+
+// TestForgotPasswordIsUniformWhenMailerFails proves forgot-password is not an existence oracle:
+// a failure for an account that DOES exist (e.g. the mailer/SMTP is down) must produce exactly
+// the same 202 response as any other outcome, not a 500 that would let an attacker distinguish
+// "exists but mail failed" from "does not exist".
+func TestForgotPasswordIsUniformWhenMailerFails(t *testing.T) {
+	s := newTestServer(t)
+	s.register(t, "asha@example.com")
+	s.mailer.fail = errors.New("smtp: connection refused")
+
+	var e envelope
+	if code := s.do(t, "POST", "/v1/auth/password/forgot", "", map[string]string{"email": "asha@example.com"}, &e); code != 202 {
+		t.Fatalf("forgot with a failing mailer for an existing account = %d %+v, want 202", code, e)
+	}
+}
+
+func TestTokenResponsesSetCacheControlNoStore(t *testing.T) {
+	s := newTestServer(t)
+	s.register(t, "asha@example.com")
+
+	req, err := http.NewRequest("POST", s.URL+"/v1/auth/login", strings.NewReader(`{"email":"asha@example.com","password":"correct horse"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := s.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("login = %d, want 200", resp.StatusCode)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want %q", got, "no-store")
 	}
 }
 
