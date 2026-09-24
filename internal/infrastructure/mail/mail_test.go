@@ -57,3 +57,34 @@ func TestLogMailerLogsAndSucceeds(t *testing.T) {
 		t.Fatalf("log output %q does not mention the recipient", buf.String())
 	}
 }
+
+func TestEnvelopeAddresses(t *testing.T) {
+	fromAddr, toAddr, err := envelopeAddresses("Shiksha AI <no-reply@example.com>", "Asha <asha@example.com>")
+	if err != nil {
+		t.Fatalf("envelopeAddresses: %v", err)
+	}
+	if fromAddr != "no-reply@example.com" {
+		t.Errorf("fromAddr = %q, want %q", fromAddr, "no-reply@example.com")
+	}
+	if toAddr != "asha@example.com" {
+		t.Errorf("toAddr = %q, want %q", toAddr, "asha@example.com")
+	}
+
+	// Test bare address To
+	fromAddr, toAddr, err = envelopeAddresses("Shiksha AI <no-reply@example.com>", "asha@example.com")
+	if err != nil {
+		t.Fatalf("envelopeAddresses with bare To: %v", err)
+	}
+	if toAddr != "asha@example.com" {
+		t.Errorf("toAddr = %q, want %q", toAddr, "asha@example.com")
+	}
+
+	// Test invalid To address
+	_, _, err = envelopeAddresses("Shiksha AI <no-reply@example.com>", "not an address")
+	if err == nil {
+		t.Errorf("envelopeAddresses with invalid To: err = nil, want rejection")
+	}
+	if !strings.Contains(err.Error(), "bad To address") {
+		t.Errorf("err = %v, want to contain %q", err, "bad To address")
+	}
+}
