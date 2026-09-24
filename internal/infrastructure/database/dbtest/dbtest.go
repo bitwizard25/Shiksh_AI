@@ -73,7 +73,7 @@ func NewPool(t testing.TB) *pgxpool.Pool {
 		t.Fatalf("dbtest: create database: %v", err)
 	}
 
-	pool, err := pgxpool.New(ctx, databaseURL(name))
+	pool, err := database.Open(ctx, databaseURL(name))
 	if err != nil {
 		t.Fatalf("dbtest: connect: %v", err)
 	}
@@ -84,12 +84,31 @@ func NewPool(t testing.TB) *pgxpool.Pool {
 	return pool
 }
 
+// NewDatabaseURL creates an empty database from template0 with the given encoding (and C
+// collation, so any encoding is accepted) and returns its connection URL. The database is
+// dropped when the test ends. It exists to test database.Open's UTF8 guard against a
+// deliberately non-UTF8 database.
+func NewDatabaseURL(t testing.TB, encoding string) string {
+	t.Helper()
+	ctx := context.Background()
+	name := fmt.Sprintf("t_enc_%d_%d", os.Getpid(), dbCounter.Add(1))
+
+	createMu.Lock()
+	err := execAdmin(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE template0 ENCODING '%s' LC_COLLATE 'C' LC_CTYPE 'C'", name, encoding))
+	createMu.Unlock()
+	if err != nil {
+		t.Fatalf("dbtest: create %s database: %v", encoding, err)
+	}
+	t.Cleanup(func() { dropDatabase(ctx, name) })
+	return databaseURL(name)
+}
+
 func createTemplate(ctx context.Context) error {
 	dropDatabase(ctx, templateName)
-	if err := execAdmin(ctx, "CREATE DATABASE "+templateName); err != nil {
+	if err := execAdmin(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'", templateName)); err != nil {
 		return err
 	}
-	pool, err := pgxpool.New(ctx, databaseURL(templateName))
+	pool, err := database.Open(ctx, databaseURL(templateName))
 	if err != nil {
 		return err
 	}
@@ -130,7 +149,9 @@ func startEmbedded() (string, func(), error) {
 		return "", nil, err
 	}
 	pg := embeddedpostgres.NewDatabase(embeddedpostgres.DefaultConfig().
-		Version(embeddedpostgres.V16).
+		Version(embeddedpostgres.V17).
+		Locale("C").
+		Encoding("UTF8").
 		Port(uint32(port)).
 		RuntimePath(filepath.Join(dir, "runtime")).
 		DataPath(filepath.Join(dir, "data")).
