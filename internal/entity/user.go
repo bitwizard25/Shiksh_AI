@@ -5,6 +5,7 @@ import (
 	"net/mail"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -48,7 +49,8 @@ func ValidatePassword(field, plain string) error {
 	return nil
 }
 
-// ParseDisplayName trims raw and checks it is 1-80 runes.
+// ParseDisplayName trims raw, checks it is 1-80 runes, and rejects control and bidi-override
+// characters that could be used to spoof how the name renders.
 func ParseDisplayName(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 	n := utf8.RuneCountInString(name)
@@ -58,7 +60,43 @@ func ParseDisplayName(raw string) (string, error) {
 	if n > MaxDisplayNameRunes {
 		return "", &ValidationError{Field: "display_name", Message: fmt.Sprintf("must be at most %d characters", MaxDisplayNameRunes)}
 	}
+	for _, r := range name {
+		if isUnsupportedDisplayNameRune(r) {
+			return "", &ValidationError{Field: "display_name", Message: "contains unsupported characters"}
+		}
+	}
 	return name, nil
+}
+
+// isUnsupportedDisplayNameRune reports whether r is a C0/C1 control character, a bidi control
+// (which can be used to make a name render misleadingly, e.g. right-to-left override), or
+// U+FEFF (byte order mark). ZWJ (U+200D) and ZWNJ (U+200C) are intentionally not rejected:
+// Indic scripts need them to render conjunct consonants correctly.
+func isUnsupportedDisplayNameRune(r rune) bool {
+	const (
+		bom              = rune(0xFEFF) // BYTE ORDER MARK / ZERO WIDTH NO-BREAK SPACE
+		lrm              = rune(0x200E) // LEFT-TO-RIGHT MARK
+		rlm              = rune(0x200F) // RIGHT-TO-LEFT MARK
+		alm              = rune(0x061C) // ARABIC LETTER MARK
+		bidiEmbedFirst   = rune(0x202A) // LEFT-TO-RIGHT EMBEDDING
+		bidiEmbedLast    = rune(0x202E) // RIGHT-TO-LEFT OVERRIDE
+		bidiIsolateFirst = rune(0x2066) // LEFT-TO-RIGHT ISOLATE
+		bidiIsolateLast  = rune(0x2069) // POP DIRECTIONAL ISOLATE
+	)
+	if unicode.Is(unicode.Cc, r) {
+		return true
+	}
+	switch r {
+	case bom, lrm, rlm, alm:
+		return true
+	}
+	if r >= bidiEmbedFirst && r <= bidiEmbedLast {
+		return true
+	}
+	if r >= bidiIsolateFirst && r <= bidiIsolateLast {
+		return true
+	}
+	return false
 }
 
 // ValidateGrade accepts nil (not given) or a school grade from 1 to 12.

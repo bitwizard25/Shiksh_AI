@@ -45,6 +45,30 @@ func TestVerifyHandlesUnicodePasswords(t *testing.T) {
 	}
 }
 
+// TestHashNormalizesUnicode proves passwords are NFC-normalized before hashing/verifying, so a
+// password typed with decomposed combining marks (e.g. from a different keyboard or OS) still
+// matches its precomposed form.
+func TestHashNormalizesUnicode(t *testing.T) {
+	h := NewArgon2Hasher(2)
+	ctx := context.Background()
+
+	enc, err := h.Hash(ctx, "passज़word1") // decomposed (base + combining nukta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := h.Verify(ctx, "passज़word1", enc); err != nil || !ok { // precomposed
+		t.Fatalf("Verify(precomposed) = %v, %v; want true", ok, err)
+	}
+
+	enc2, err := h.Hash(ctx, "passज़word1") // precomposed
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := h.Verify(ctx, "passज़word1", enc2); err != nil || !ok { // decomposed
+		t.Fatalf("Verify(decomposed) = %v, %v; want true", ok, err)
+	}
+}
+
 func TestVerifyRejectsMalformedHash(t *testing.T) {
 	h := NewArgon2Hasher(1)
 	for _, enc := range []string{

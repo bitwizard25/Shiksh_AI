@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/bitwizard25/Shiksh_AI/internal/entity"
 	"github.com/bitwizard25/Shiksh_AI/internal/usecase"
@@ -62,7 +63,7 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, pair, err := a.auth.Register(r.Context(), usecase.RegisterInput{
-		Email: req.Email, Password: req.Password, DisplayName: req.DisplayName, PreferredLang: req.PreferredLang,
+		Email: norm.NFC.String(req.Email), Password: req.Password, DisplayName: norm.NFC.String(req.DisplayName), PreferredLang: req.PreferredLang,
 		Grade: req.Grade, TermsAccepted: req.TermsAccepted, GuardianConsent: req.GuardianConsent,
 	})
 	if err != nil {
@@ -89,7 +90,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !a.allow(w, r, a.limits.Login, ip+"|"+emailKey(req.Email)) {
 		return
 	}
-	user, pair, err := a.auth.Login(r.Context(), req.Email, req.Password)
+	user, pair, err := a.auth.Login(r.Context(), norm.NFC.String(req.Email), req.Password)
 	if err != nil {
 		serviceError(a.log, w, r, err)
 		return
@@ -144,7 +145,7 @@ func (a *API) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	if !a.allow(w, r, a.limits.Forgot, emailKey(req.Email)) {
 		return
 	}
-	if err := a.auth.ForgotPassword(r.Context(), req.Email); err != nil {
+	if err := a.auth.ForgotPassword(r.Context(), norm.NFC.String(req.Email)); err != nil {
 		serviceError(a.log, w, r, err)
 		return
 	}

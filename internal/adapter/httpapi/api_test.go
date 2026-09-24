@@ -269,6 +269,80 @@ func TestLanguages(t *testing.T) {
 	}
 }
 
+// nfcPair returns a Devanagari string using U+095B (DEVANAGARI LETTER ZA, itself excluded from
+// NFC composition) and the same string using its canonical decomposition (U+091C U+093C, base
+// consonant + combining nukta). NFC normalization maps both to the decomposed form, so it is
+// what's used to test that normalization at the DTO boundary made the two equivalent.
+func nfcPair(prefix string) (za, decomposed string) {
+	za = prefix + string(rune(0x095B))
+	decomposed = prefix + string(rune(0x091C)) + string(rune(0x093C))
+	return za, decomposed
+}
+
+func TestRegisterNormalizesDisplayNameToNFC(t *testing.T) {
+	s := newTestServer(t)
+	za, wantNFC := nfcPair("Asha")
+
+	body := registerBody("nfc-name@example.com")
+	body["display_name"] = za
+	var reg authResponse
+	if code := s.do(t, "POST", "/v1/auth/register", "", body, &reg); code != http.StatusCreated {
+		t.Fatalf("register = %d", code)
+	}
+	if reg.User.DisplayName != wantNFC {
+		t.Fatalf("display_name = %q, want NFC-normalized %q", reg.User.DisplayName, wantNFC)
+	}
+}
+
+func TestPatchMeNormalizesDisplayNameToNFC(t *testing.T) {
+	s := newTestServer(t)
+	reg := s.register(t, "nfc-patch@example.com")
+	bearer := "Bearer " + reg.AccessToken
+	za, wantNFC := nfcPair("Ravi")
+
+	var me userResponse
+	if code := s.do(t, "PATCH", "/v1/me", bearer, map[string]any{"display_name": za}, &me); code != 200 {
+		t.Fatalf("patch = %d", code)
+	}
+	if me.DisplayName != wantNFC {
+		t.Fatalf("display_name = %q, want NFC-normalized %q", me.DisplayName, wantNFC)
+	}
+}
+
+func TestRegisterAndLoginNormalizeEmailToNFC(t *testing.T) {
+	s := newTestServer(t)
+	// "café@example.com" with a decomposed 'e' + combining acute accent (U+0301) vs the same
+	// address typed with the precomposed 'é' (U+00E9).
+	decomposedEmail := "cafe" + string(rune(0x0301)) + "@example.com"
+	composedEmail := "caf" + string(rune(0x00E9)) + "@example.com"
+
+	body := registerBody(decomposedEmail)
+	if code := s.do(t, "POST", "/v1/auth/register", "", body, nil); code != http.StatusCreated {
+		t.Fatalf("register = %d", code)
+	}
+	if code := s.do(t, "POST", "/v1/auth/login", "", map[string]string{"email": composedEmail, "password": "correct horse"}, nil); code != 200 {
+		t.Fatalf("login with NFC-equivalent email = %d, want 200", code)
+	}
+}
+
+// TestRegisterAndLoginWithDifferentlyDecomposedPassword is the end-to-end proof that password
+// NFC normalization (crypto.Argon2Hasher) actually reaches real HTTP traffic: registering and
+// logging in with the same password typed in two different Unicode normalization forms succeeds.
+func TestRegisterAndLoginWithDifferentlyDecomposedPassword(t *testing.T) {
+	s := newTestServer(t)
+	decomposedPassword := "pass" + string(rune(0x091C)) + string(rune(0x093C)) + "word1"
+	composedPassword := "pass" + string(rune(0x095B)) + "word1"
+
+	body := registerBody("nfc-password@example.com")
+	body["password"] = decomposedPassword
+	if code := s.do(t, "POST", "/v1/auth/register", "", body, nil); code != http.StatusCreated {
+		t.Fatalf("register = %d", code)
+	}
+	if code := s.do(t, "POST", "/v1/auth/login", "", map[string]string{"email": "nfc-password@example.com", "password": composedPassword}, nil); code != 200 {
+		t.Fatalf("login with NFC-equivalent password = %d, want 200", code)
+	}
+}
+
 func TestDeleteAccountRateLimit(t *testing.T) {
 	s := newTestServer(t)
 	reg := s.register(t, "asha@example.com")

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/bitwizard25/Shiksh_AI/internal/usecase"
 )
@@ -28,6 +29,10 @@ func (a *API) handlePatchMe(w http.ResponseWriter, r *http.Request, userID uuid.
 	var req patchMeRequest
 	if !decodeJSON(w, r, &req) {
 		return
+	}
+	if req.DisplayName != nil {
+		normalized := norm.NFC.String(*req.DisplayName)
+		req.DisplayName = &normalized
 	}
 	user, err := a.accounts.UpdateProfile(r.Context(), userID, usecase.ProfileInput{
 		DisplayName: req.DisplayName, PreferredLang: req.PreferredLang, Grade: req.Grade,
