@@ -102,6 +102,24 @@ func TestServiceErrorMapping(t *testing.T) {
 	}
 }
 
+func TestErrorEnvelopeAlwaysCarriesRequestID(t *testing.T) {
+	// Behind withRequestID the id is present and non-empty.
+	h := withRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, r, http.StatusBadRequest, "bad_request", "nope")
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if e := decodeEnvelope(t, rec); e.Error.RequestID == "" || e.Error.RequestID != rec.Header().Get("X-Request-ID") {
+		t.Fatalf("request_id = %q, header = %q; want the same non-empty id", e.Error.RequestID, rec.Header().Get("X-Request-ID"))
+	}
+	// Even without the middleware the key is emitted, so a wiring bug is visible, not silent.
+	rec = httptest.NewRecorder()
+	writeError(rec, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusBadRequest, "bad_request", "nope")
+	if !strings.Contains(rec.Body.String(), `"request_id":""`) {
+		t.Fatalf("body %q lacks an explicit request_id key", rec.Body.String())
+	}
+}
+
 func TestRequestID(t *testing.T) {
 	var seen string
 	h := withRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { seen = requestIDFrom(r.Context()) }))
