@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -55,7 +54,7 @@ type registerRequest struct {
 }
 
 func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
-	if !a.allow(w, r, a.limits.Register, clientIP(r, a.trustProxy)) {
+	if !a.allow(w, r, a.limits.Register, limiterIP(clientIP(r, a.trustProxy))) {
 		return
 	}
 	var req registerRequest
@@ -79,7 +78,7 @@ type loginRequest struct {
 }
 
 func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r, a.trustProxy)
+	ip := limiterIP(clientIP(r, a.trustProxy))
 	if !a.allow(w, r, a.limits.LoginIP, ip) {
 		return
 	}
@@ -87,7 +86,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if !a.allow(w, r, a.limits.Login, ip+"|"+strings.ToLower(strings.TrimSpace(req.Email))) {
+	if !a.allow(w, r, a.limits.Login, ip+"|"+emailKey(req.Email)) {
 		return
 	}
 	user, pair, err := a.auth.Login(r.Context(), req.Email, req.Password)
@@ -103,7 +102,7 @@ type refreshRequest struct {
 }
 
 func (a *API) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	if !a.allow(w, r, a.limits.Refresh, clientIP(r, a.trustProxy)) {
+	if !a.allow(w, r, a.limits.Refresh, limiterIP(clientIP(r, a.trustProxy))) {
 		return
 	}
 	var req refreshRequest
@@ -135,14 +134,14 @@ type forgotRequest struct {
 }
 
 func (a *API) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
-	if !a.allow(w, r, a.limits.ForgotIP, clientIP(r, a.trustProxy)) {
+	if !a.allow(w, r, a.limits.ForgotIP, limiterIP(clientIP(r, a.trustProxy))) {
 		return
 	}
 	var req forgotRequest
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if !a.allow(w, r, a.limits.Forgot, strings.ToLower(strings.TrimSpace(req.Email))) {
+	if !a.allow(w, r, a.limits.Forgot, emailKey(req.Email)) {
 		return
 	}
 	if err := a.auth.ForgotPassword(r.Context(), req.Email); err != nil {
@@ -158,7 +157,7 @@ type resetRequest struct {
 }
 
 func (a *API) handleResetPassword(w http.ResponseWriter, r *http.Request) {
-	if !a.allow(w, r, a.limits.ForgotIP, clientIP(r, a.trustProxy)) {
+	if !a.allow(w, r, a.limits.ForgotIP, limiterIP(clientIP(r, a.trustProxy))) {
 		return
 	}
 	var req resetRequest
