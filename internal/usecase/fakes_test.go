@@ -222,9 +222,13 @@ type noTx struct{}
 func (noTx) WithinTx(ctx context.Context, fn func(ctx context.Context) error) error { return fn(ctx) }
 
 // fakeHasher "hashes" by prefixing and counts dummy verifications.
-type fakeHasher struct{ dummyCalls atomic.Int32 }
+type fakeHasher struct {
+	dummyCalls atomic.Int32
+	hashCalls  atomic.Int32
+}
 
 func (h *fakeHasher) Hash(_ context.Context, plain string) (string, error) {
+	h.hashCalls.Add(1)
 	return "hashed:" + plain, nil
 }
 

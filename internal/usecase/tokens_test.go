@@ -188,3 +188,17 @@ func TestForgotPasswordUnknownOrMalformedEmailSendsNothing(t *testing.T) {
 		t.Fatal("email sent for an account that does not exist")
 	}
 }
+
+func TestResetWithBogusTokenDoesNotHash(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	mustRegister(t, e)
+	before := e.hasher.hashCalls.Load()
+	err := e.auth.ResetPassword(ctx, "bogus", "long enough pw")
+	if !errors.Is(err, entity.ErrTokenInvalid) {
+		t.Fatalf("ResetPassword with bogus token err = %v, want ErrTokenInvalid", err)
+	}
+	if e.hasher.hashCalls.Load() != before {
+		t.Fatalf("hash was called for bogus token: before=%d, after=%d", before, e.hasher.hashCalls.Load())
+	}
+}
