@@ -230,12 +230,12 @@ func TestDefaultLimitsFillsEveryLimiter(t *testing.T) {
 		got = append(got, spec{interval.String(), burst})
 		return allowAll{}
 	})
-	for name, lim := range map[string]RateLimiter{"Register": l.Register, "Login": l.Login, "LoginIP": l.LoginIP, "Refresh": l.Refresh, "Forgot": l.Forgot, "ForgotIP": l.ForgotIP} {
+	for name, lim := range map[string]RateLimiter{"Register": l.Register, "Login": l.Login, "LoginIP": l.LoginIP, "Refresh": l.Refresh, "Forgot": l.Forgot, "ForgotIP": l.ForgotIP, "DeleteAccount": l.DeleteAccount} {
 		if lim == nil {
 			t.Errorf("%s limiter is nil", name)
 		}
 	}
-	want := []spec{{"6s", 10}, {"12s", 5}, {"1s", 60}, {"2s", 30}, {"20m0s", 3}, {"6s", 10}}
+	want := []spec{{"6s", 10}, {"12s", 5}, {"1s", 60}, {"2s", 30}, {"20m0s", 3}, {"6s", 10}, {"12s", 5}}
 	if len(got) != len(want) {
 		t.Fatalf("created %d limiters, want %d", len(got), len(want))
 	}

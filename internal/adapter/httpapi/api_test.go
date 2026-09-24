@@ -268,3 +268,19 @@ func TestLanguages(t *testing.T) {
 		t.Fatalf("languages = %+v", langs)
 	}
 }
+
+func TestDeleteAccountRateLimit(t *testing.T) {
+	s := newTestServer(t)
+	reg := s.register(t, "asha@example.com")
+	bearer := "Bearer " + reg.AccessToken
+
+	var e envelope
+	for attempt := 1; attempt <= 5; attempt++ {
+		if code := s.do(t, "DELETE", "/v1/me", bearer, map[string]string{"password": "wrong horse"}, &e); code != 401 || e.Error.Code != "invalid_credentials" {
+			t.Fatalf("attempt %d = %d %+v", attempt, code, e)
+		}
+	}
+	if code := s.do(t, "DELETE", "/v1/me", bearer, map[string]string{"password": "wrong horse"}, &e); code != 429 || e.Error.Code != "rate_limited" {
+		t.Fatalf("6th attempt = %d %+v, want 429 rate_limited", code, e)
+	}
+}
