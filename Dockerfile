@@ -11,4 +11,4 @@ COPY --from=build /out/shiksha /shiksha
 EXPOSE 8080 9090
 USER nonroot:nonroot
 ENTRYPOINT ["/shiksha"]
-CMD ["serve"]
+CMD ["serve", "--migrate=false"]
