@@ -40,9 +40,9 @@ type SMTPMailer struct {
 var _ usecase.Mailer = SMTPMailer{}
 
 func (s SMTPMailer) Send(ctx context.Context, m usecase.Message) error {
-	from, err := mail.ParseAddress(s.From)
+	fromAddr, toAddr, err := envelopeAddresses(s.From, m.To)
 	if err != nil {
-		return fmt.Errorf("mail: bad From address: %w", err)
+		return err
 	}
 	msg, err := buildMessage(s.From, m, time.Now())
 	if err != nil {
@@ -76,10 +76,10 @@ func (s SMTPMailer) Send(ctx context.Context, m usecase.Message) error {
 			return fmt.Errorf("mail: auth: %w", err)
 		}
 	}
-	if err := c.Mail(from.Address); err != nil {
+	if err := c.Mail(fromAddr); err != nil {
 		return fmt.Errorf("mail: MAIL FROM: %w", err)
 	}
-	if err := c.Rcpt(m.To); err != nil {
+	if err := c.Rcpt(toAddr); err != nil {
 		return fmt.Errorf("mail: RCPT TO: %w", err)
 	}
 	w, err := c.Data()
@@ -93,6 +93,20 @@ func (s SMTPMailer) Send(ctx context.Context, m usecase.Message) error {
 		return fmt.Errorf("mail: end body: %w", err)
 	}
 	return c.Quit()
+}
+
+// envelopeAddresses returns the bare addresses for the SMTP envelope (MAIL FROM / RCPT TO),
+// stripping any display names from the header forms.
+func envelopeAddresses(from, to string) (fromAddr, toAddr string, err error) {
+	fromParsed, err := mail.ParseAddress(from)
+	if err != nil {
+		return "", "", fmt.Errorf("mail: bad From address: %w", err)
+	}
+	toParsed, err := mail.ParseAddress(to)
+	if err != nil {
+		return "", "", fmt.Errorf("mail: bad To address: %w", err)
+	}
+	return fromParsed.Address, toParsed.Address, nil
 }
 
 func buildMessage(from string, m usecase.Message, now time.Time) ([]byte, error) {
