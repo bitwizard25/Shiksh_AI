@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -76,8 +77,11 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 	}
 
 	errCh := make(chan error, len(servers))
+	var wg sync.WaitGroup
 	for _, s := range servers {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			a.log.Info("listening", "addr", s.Addr)
 			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				errCh <- fmt.Errorf("serve %s: %w", s.Addr, err)
@@ -97,9 +101,14 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 	ready.Store(false)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownTimeout)
 	defer cancel()
-	errs := []error{runErr}
 	for _, s := range servers {
-		errs = append(errs, s.Shutdown(shutdownCtx))
+		s.Shutdown(shutdownCtx)
+	}
+	wg.Wait()
+	close(errCh)
+	errs := []error{runErr}
+	for err := range errCh {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
 }
