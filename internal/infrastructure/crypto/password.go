@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/text/unicode/norm"
 
 	"github.com/bitwizard25/Shiksh_AI/internal/usecase"
 )
@@ -47,6 +48,7 @@ func NewArgon2Hasher(maxConcurrent int) *Argon2Hasher {
 
 // Hash returns a PHC-formatted hash: $argon2id$v=19$m=19456,t=2,p=1$<salt>$<key>.
 func (h *Argon2Hasher) Hash(ctx context.Context, password string) (string, error) {
+	password = norm.NFC.String(password)
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", err
@@ -60,8 +62,11 @@ func (h *Argon2Hasher) Hash(ctx context.Context, password string) (string, error
 }
 
 // Verify reports whether password matches encoded. Parameters are read from the hash itself,
-// so hashes made with older parameters keep verifying after the constants change.
+// so hashes made with older parameters keep verifying after the constants change. password is
+// NFC-normalized before comparing, matching Hash, so a password typed with differently
+// decomposed combining marks still verifies.
 func (h *Argon2Hasher) Verify(ctx context.Context, password, encoded string) (bool, error) {
+	password = norm.NFC.String(password)
 	salt, key, m, t, p, err := decodeHash(encoded)
 	if err != nil {
 		return false, err

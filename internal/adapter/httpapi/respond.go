@@ -22,7 +22,7 @@ type errorDetail struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Field     string `json:"field,omitempty"`
-	RequestID string `json:"request_id,omitempty"`
+	RequestID string `json:"request_id"`
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

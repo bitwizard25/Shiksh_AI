@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -107,6 +108,37 @@ func TestUsersUpdatePassword(t *testing.T) {
 	got, _ := users.GetByID(ctx, u.ID)
 	if got.PasswordHash != "new-hash" {
 		t.Fatalf("PasswordHash = %q", got.PasswordHash)
+	}
+}
+
+func TestUsersStoreIndicTextAsUnicode(t *testing.T) {
+	pool := dbtest.NewPool(t)
+	users := repository.NewUsers(pool)
+	ctx := t.Context()
+
+	for _, name := range []string{"मीरा", "மீனா"} {
+		in := newUserInput(uuid.NewString() + "@example.com")
+		in.DisplayName = name
+		created, err := users.Create(ctx, in)
+		if err != nil {
+			t.Fatalf("Create(%q): %v", name, err)
+		}
+		got, err := users.GetByID(ctx, created.ID)
+		if err != nil || got.DisplayName != name {
+			t.Fatalf("GetByID(%q) display_name = %q, %v; want %q", name, got.DisplayName, err, name)
+		}
+
+		var length int
+		var equal bool
+		if err := pool.QueryRow(ctx, `SELECT length(display_name), display_name = $2 FROM users WHERE id = $1`, created.ID, name).Scan(&length, &equal); err != nil {
+			t.Fatalf("query length/equality for %q: %v", name, err)
+		}
+		if length != utf8.RuneCountInString(name) {
+			t.Errorf("length(display_name) for %q = %d, want %d", name, length, utf8.RuneCountInString(name))
+		}
+		if !equal {
+			t.Errorf("display_name = $2 for %q was false", name)
+		}
 	}
 }
 
