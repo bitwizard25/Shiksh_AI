@@ -93,7 +93,7 @@ Client (web/mobile)                 Go backend (single binary, CGO_ENABLED=0)   
 | WebSocket | `github.com/coder/websocket` |
 | DB | `github.com/jackc/pgx/v5` (pgxpool), hand-written SQL (no sqlc: it avoids a cgo toolchain on Windows) |
 | Migrations | `github.com/pressly/goose/v3` Provider, embedded FS, `*sql.DB` via `pgx/v5/stdlib.OpenDBFromPool`, Postgres session locker |
-| Passwords | `golang.org/x/crypto/argon2`, argon2id (m=19 MiB, t=2, p=1), PHC string, **global semaphore 2×NumCPU** |
+| Passwords | `golang.org/x/crypto/argon2`, argon2id (m=19 MiB, t=2, p=1), PHC string, **global semaphore 2×GOMAXPROCS (container-aware)** |
 | JWT | `github.com/golang-jwt/jwt/v5`, HS256, parsed with `WithValidMethods`, `WithIssuer`, `WithAudience`, `WithExpirationRequired` |
 | Rate limiting | `golang.org/x/time/rate` |
 | Concurrency | `golang.org/x/sync/errgroup`, `golang.org/x/sync/singleflight` |
@@ -1211,7 +1211,7 @@ Every role also runs the admin listener (`/healthz`, `/readyz`, `/metrics`) and 
 
 - **realtime** is I/O-bound. Worst case per session is about 1.5 MB: the utterance buffer (≤ 960 KB at the 30 s cap) plus in-flight TTS PCM (about 3 × 130 KB). That leaves room for about 1,000 concurrent sessions on a 2 GB instance. CPU goes mostly to base64 and JSON.
 - **The real ceiling is provider quotas** (Bhashini, Gemini RPM/TPM), which the Guard enforces and `/metrics` shows.
-- **api** CPU is dominated by argon2id, capped at 2×NumCPU concurrent hashes (about 19 MiB each).
+- **api** CPU is dominated by argon2id, capped at 2×GOMAXPROCS (container-aware) concurrent hashes (about 19 MiB each).
 
 ### 19.8 Deployment topology
 

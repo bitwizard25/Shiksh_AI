@@ -1,0 +1,26 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: shiksha
+    ports: ["5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shiksha"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  api:
+    build: .
+    command: ["serve", "--roles=api"]
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/shiksha?sslmode=disable
+    ports: ["8080:8080", "9090:9090"]
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  pgdata:

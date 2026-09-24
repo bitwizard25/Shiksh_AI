@@ -3,11 +3,31 @@ package database_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/database"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/database/dbtest"
 )
+
+func TestOpenRejectsNonUTF8Database(t *testing.T) {
+	url := dbtest.NewDatabaseURL(t, "SQL_ASCII")
+	_, err := database.Open(context.Background(), url)
+	if err == nil || !strings.Contains(err.Error(), "UTF8") {
+		t.Fatalf("Open on a SQL_ASCII database: err = %v, want an error mentioning UTF8", err)
+	}
+}
+
+func TestTestDatabasesAreUTF8(t *testing.T) {
+	pool := dbtest.NewPool(t)
+	var enc string
+	if err := pool.QueryRow(context.Background(), `SELECT current_setting('server_encoding')`).Scan(&enc); err != nil {
+		t.Fatalf("query server_encoding: %v", err)
+	}
+	if enc != "UTF8" {
+		t.Fatalf("server_encoding = %q, want UTF8", enc)
+	}
+}
 
 func TestMigrationsCreateSchema(t *testing.T) {
 	pool := dbtest.NewPool(t)

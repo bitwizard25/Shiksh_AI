@@ -16,6 +16,8 @@ type Limits struct {
 	Refresh  RateLimiter // per IP
 	Forgot   RateLimiter // per email (forgot and reset)
 	ForgotIP RateLimiter // per IP (forgot and reset)
+
+	DeleteAccount RateLimiter // per user id
 }
 
 // DefaultLimits returns the production budgets, building each limiter with newLimiter
@@ -28,5 +30,7 @@ func DefaultLimits(newLimiter func(interval time.Duration, burst int) RateLimite
 		Refresh:  newLimiter(time.Minute/30, 30),
 		Forgot:   newLimiter(time.Hour/3, 3),
 		ForgotIP: newLimiter(time.Minute/10, 10),
+
+		DeleteAccount: newLimiter(time.Minute/5, 5),
 	}
 }

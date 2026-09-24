@@ -9,3 +9,9 @@ coverage.out
 
 # agent worktrees created by the Claude Code harness
 .claude/worktrees/
+
+# superpowers planning and artifacts
+docs/superpowers/
+doc/superpower/
+doc/superpowers/
+.superpowers/

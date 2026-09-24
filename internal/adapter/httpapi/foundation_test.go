@@ -102,6 +102,24 @@ func TestServiceErrorMapping(t *testing.T) {
 	}
 }
 
+func TestErrorEnvelopeAlwaysCarriesRequestID(t *testing.T) {
+	// Behind withRequestID the id is present and non-empty.
+	h := withRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, r, http.StatusBadRequest, "bad_request", "nope")
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if e := decodeEnvelope(t, rec); e.Error.RequestID == "" || e.Error.RequestID != rec.Header().Get("X-Request-ID") {
+		t.Fatalf("request_id = %q, header = %q; want the same non-empty id", e.Error.RequestID, rec.Header().Get("X-Request-ID"))
+	}
+	// Even without the middleware the key is emitted, so a wiring bug is visible, not silent.
+	rec = httptest.NewRecorder()
+	writeError(rec, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusBadRequest, "bad_request", "nope")
+	if !strings.Contains(rec.Body.String(), `"request_id":""`) {
+		t.Fatalf("body %q lacks an explicit request_id key", rec.Body.String())
+	}
+}
+
 func TestRequestID(t *testing.T) {
 	var seen string
 	h := withRequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { seen = requestIDFrom(r.Context()) }))
@@ -212,12 +230,12 @@ func TestDefaultLimitsFillsEveryLimiter(t *testing.T) {
 		got = append(got, spec{interval.String(), burst})
 		return allowAll{}
 	})
-	for name, lim := range map[string]RateLimiter{"Register": l.Register, "Login": l.Login, "LoginIP": l.LoginIP, "Refresh": l.Refresh, "Forgot": l.Forgot, "ForgotIP": l.ForgotIP} {
+	for name, lim := range map[string]RateLimiter{"Register": l.Register, "Login": l.Login, "LoginIP": l.LoginIP, "Refresh": l.Refresh, "Forgot": l.Forgot, "ForgotIP": l.ForgotIP, "DeleteAccount": l.DeleteAccount} {
 		if lim == nil {
 			t.Errorf("%s limiter is nil", name)
 		}
 	}
-	want := []spec{{"6s", 10}, {"12s", 5}, {"1s", 60}, {"2s", 30}, {"20m0s", 3}, {"6s", 10}}
+	want := []spec{{"6s", 10}, {"12s", 5}, {"1s", 60}, {"2s", 30}, {"20m0s", 3}, {"6s", 10}, {"12s", 5}}
 	if len(got) != len(want) {
 		t.Fatalf("created %d limiters, want %d", len(got), len(want))
 	}
