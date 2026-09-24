@@ -70,6 +70,13 @@ openssl rand -base64 48
 docker compose up --build
 ```
 
+`docker-compose.yml` runs `serve --roles=api` with migrations on (`--migrate` defaults to
+`true`), which is convenient for local dev. The production image's default `CMD` is
+`serve --migrate=false`: a service instance should never race another replica to apply
+migrations at startup. Run `shiksha migrate` once as its own release step instead, using a
+direct (non-PgBouncer) `DATABASE_URL` — migrations need a real session, not a pooled
+transaction-mode connection.
+
 ## Tests
 
 ```bash
