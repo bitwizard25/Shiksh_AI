@@ -55,6 +55,25 @@ func TestParseDisplayName(t *testing.T) {
 	wantField(t, err, "display_name")
 }
 
+func TestParseDisplayNameRejectsControlAndBidiCharacters(t *testing.T) {
+	rlo := string(rune(0x202E)) // RIGHT-TO-LEFT OVERRIDE
+	nul := string(rune(0x0000)) // NUL, a C0 control
+	for _, bad := range []string{
+		"Asha" + rlo + "evil",
+		"line\nbreak", // C0 control (newline)
+		"a" + nul + "b",
+	} {
+		_, err := entity.ParseDisplayName(bad)
+		wantField(t, err, "display_name")
+	}
+	// ZWJ (U+200D) is required to render conjunct consonants in Indic scripts and must stay allowed.
+	zwj := string(rune(0x200D))
+	name := "क्" + zwj + "ष"
+	if got, err := entity.ParseDisplayName(name); err != nil || got != name {
+		t.Fatalf("ParseDisplayName(ZWJ) = %q, %v; want it accepted unchanged", got, err)
+	}
+}
+
 func TestValidateGrade(t *testing.T) {
 	for _, g := range []int{1, 12} {
 		if err := entity.ValidateGrade(&g); err != nil {
