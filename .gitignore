@@ -1,0 +1,11 @@
+# local runtime data and secrets
+.devdata/
+.env
+out/
+bin/
+*.exe
+*.test
+coverage.out
+
+# agent worktrees created by the Claude Code harness
+.claude/worktrees/
