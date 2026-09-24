@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,5 +66,31 @@ func TestRunShutsDownWhenContextIsCancelled(t *testing.T) {
 func TestRunRejectsUnimplementedRole(t *testing.T) {
 	if err := testApp(t).Run(context.Background(), []Role{"worker"}); err == nil {
 		t.Fatal("Run accepted a role it cannot start")
+	}
+}
+
+func TestRunReportsServerStartFailure(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer l.Close()
+
+	a := testApp(t)
+	a.cfg.HTTPAddr = l.Addr().String()
+
+	done := make(chan error, 1)
+	go func() { done <- a.Run(context.Background(), []Role{RoleAPI}) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Run returned nil, want error for port conflict")
+		}
+		if !strings.Contains(err.Error(), "serve "+l.Addr().String()) {
+			t.Errorf("Run error = %v, want to mention %q", err, "serve "+l.Addr().String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after port conflict")
 	}
 }
