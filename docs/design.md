@@ -1,5 +1,9 @@
 # Shiksha_AI — Go Backend: HLD + LLD + Implementation Plan
 
+> **Revision 2 (2026-09-24):** the architecture now follows **classic Clean Architecture layers** and is built to **scale horizontally** (one binary with api, realtime and worker roles, coordinated only through Postgres).
+> - [§19](#19-revision-2--clean-architecture-and-horizontal-scaling) is the authority on architecture and scaling. It supersedes the old §5 layout (rewritten below), the cross-instance parts of §11, the sweeper scheduling in §13, the lifecycle in §14, and diagram §18.1.
+> - Package names used in §9–§13 map onto the new layers as shown in §19.1.
+
 ## 1. Context
 
 Shiksha_AI is a voice-first tutor for Indian-language learners. The loop is: learner speaks → Bhashini ASR → Gemini reasoning → Bhashini TTS → learner hears the reply. The turn structure and latency budget are designed so the exchange feels like talking to a person. The repo is empty (only `README.md`, remote `github.com/bitwizard25/Shiksh_AI`). This plan covers **the backend only, in Go**. Local toolchain: Go 1.27, gcc (mingw) with CGO so `-race` works, **no Docker, no make**.
@@ -16,6 +20,8 @@ Shiksha_AI is a voice-first tutor for Indian-language learners. The loop is: lea
 | v1 tutor scope | Open doubt-solving tutor (subject + grade + language, Socratic, session memory). Structured lessons and language-learning mode go in **README → Upcoming Features** |
 | Endpointing | Client VAD sends `speech.start`/`speech.end`; the server enforces guardrails |
 | Deploy | Portable: Dockerfile + docker-compose, no cloud-specific code (must run in an India region for latency) |
+| Architecture | Classic Clean Architecture layers: entity → usecase → adapter → infrastructure. A test enforces the dependency rule (§19) |
+| Scaling | Horizontal. One binary with `api`, `realtime` and `worker` roles. Coordination is Postgres-only (LISTEN/NOTIFY bus, River jobs) behind ports, so Redis can drop in later (§19) |
 
 **Provider facts that shape the design** (from research)
 - Bhashini REST (ULCA pipeline) is **batch only**. A config call returns `serviceId`, `callbackUrl` and the inference key; a compute call then sends base64 audio or text. There is **no streaming TTS.** Streaming ASR does exist (socket.io over `wss://dhruva-api.bhashini.gov.in`), but it is immature and Go compatibility is unverified. **v1 uses REST ASR.** Streaming ASR stays behind the same interface as the first latency lever.
@@ -101,57 +107,52 @@ Client (web/mobile)                 Go backend (single binary, CGO_ENABLED=0)   
 
 ## 5. Repository layout
 
+Classic Clean Architecture layers (see §19 for the rules). The plan that introduces each package is noted on the right.
+
 ```
 Shiksh_AI/
 ├── cmd/
-│   ├── server/main.go            # wiring, lifecycle, graceful drain
-│   └── voicecli/main.go          # asr|tts|llm|assets|demo|bench
+│   ├── shiksha/main.go            # one binary: `shiksha serve --roles=api,realtime,worker [--migrate]` | `shiksha migrate`
+│   ├── devdb/main.go              # local embedded Postgres for development (no Docker)
+│   └── voicecli/main.go           # asr|tts|llm|assets|demo|bench                                  (Plan 2+)
 ├── internal/
-│   ├── config/config.go          # Config + Load() + Validate()
-│   ├── domain/                   # User, Session, Message, errors (no deps)
-│   ├── lang/registry.go          # Language{Code,Name,NativeName,TTSGender,Phrases{Redirect,Repeat,Error},Available}
-│   ├── audio/
-│   │   ├── wav.go                # EncodePCM16WAV, DecodeWAV → (pcm, rate, channels)
-│   │   ├── buffer.go             # UtteranceBuffer (cap, duration, prepend for continuation)
-│   │   └── resample.go           # linear resampler (voicecli/testdata only)
-│   ├── auth/
-│   │   ├── password.go           # Hash/Verify argon2id + semaphore + dummy hash
-│   │   ├── tokens.go             # JWT issue/verify; opaque tokens; sha256
-│   │   └── service.go            # Register, Login, Refresh, Logout, Forgot/ResetPassword, DeleteAccount, Tickets
-│   ├── mail/mail.go              # Mailer interface; SMTPMailer; LogMailer
-│   ├── store/
-│   │   ├── store.go  migrate.go  migrations/00001_init.sql
-│   │   ├── users.go  tokens.go  sessions.go  messages.go
-│   ├── providers/
-│   │   ├── provider.go           # ASR/LLM/TTS interfaces, types, *Error, Retry
-│   │   ├── guard.go              # per-provider semaphore + circuit breaker + metrics wrapper
-│   │   ├── warmer.go             # keep TLS pools warm (touch on speech.start)
-│   │   ├── bhashini/ client.go types.go asr.go tts.go
-│   │   ├── gemini/llm.go
-│   │   └── fake/fake.go
-│   ├── tutor/ subjects.go prompt.go history.go normalize.go summarize.go
-│   ├── voice/
-│   │   ├── protocol.go           # JSON messages + binary frame codec
-│   │   ├── transport.go          # interface over *websocket.Conn (fake in tests)
-│   │   ├── conn.go               # reader pump, pinger
-│   │   ├── outbox.go             # single writer, turn-tag dropping, written-seq tracking
-│   │   ├── session.go            # actor + state machine + guardrails
-│   │   ├── turn.go               # pipeline orchestration
-│   │   ├── segmenter.go          # streaming clause/sentence segmenter
-│   │   ├── ttspool.go            # bounded parallel TTS + in-order release
-│   │   ├── clips.go              # embedded filler/repeat/error clips per language
-│   │   ├── assets/clips/<lang>/{filler_*.wav,repeat.wav,error.wav,redirect.wav}
-│   │   ├── persister.go          # ordered, epoch-fenced async DB writes
-│   │   ├── timing.go             # latency marks
-│   │   └── hub.go                # live-session registry, replace, drain
-│   ├── httpapi/ router.go middleware.go respond.go ratelimit.go
-│   │            auth_handlers.go user_handlers.go session_handlers.go ws_handler.go
-│   ├── sweeper/sweeper.go
-│   └── metrics/metrics.go
+│   ├── entity/                    # LAYER 1: enterprise rules. Imports only stdlib + uuid
+│   │   ├── errors.go              # ErrNotFound, ErrEmailTaken, ErrInvalidCredentials, ErrTokenInvalid, ValidationError
+│   │   ├── user.go                # User, Email value object, password / display-name / grade rules
+│   │   ├── language.go            # Language registry (code, names; TTS gender + phrases in Plan 2)
+│   │   ├── token.go               # RefreshToken + IsReplay(now, grace)
+│   │   ├── session.go             # TutoringSession, status transitions, epoch, subject catalogue    (Plan 3)
+│   │   └── message.go             # Message, roles, statuses, heard-text rule                        (Plan 3)
+│   ├── usecase/                   # LAYER 2: application rules + the ports they need. Imports only entity
+│   │   ├── ports.go               # UserRepository, TokenRepository, TxManager, PasswordHasher,
+│   │   │                          # AccessTokens, OpaqueTokens, Mailer
+│   │   ├── auth.go  accounts.go  catalog.go                                                        (Plan 1)
+│   │   ├── sessions.go  tickets.go  summaries.go  prompt.go  history.go                           (Plan 3)
+│   │   └── conversation/          # realtime use case: Session actor, turn pipeline, segmenter, TTS pool,
+│   │                              # timing, hub; ports ASR, LLM, TTS, Output, Clips, EventBus           (Plan 4)
+│   ├── adapter/                   # LAYER 3: interface adapters (translate between use cases and the world)
+│   │   ├── httpapi/               # REST controllers, DTOs, middleware, admin endpoints              (Plan 1)
+│   │   ├── repository/            # Postgres implementations of the repository ports                (Plan 1, 3)
+│   │   ├── gateway/               # bhashini/, gemini/, fake/, guard.go (semaphore + breaker)        (Plan 2)
+│   │   ├── ws/                    # WebSocket controller, frame codec, outbox with the drop rule     (Plan 4)
+│   │   ├── bus/                   # Postgres LISTEN/NOTIFY session-control bus                        (Plan 3)
+│   │   └── jobs/                  # River workers: summarize_session, send_email, sweep, purge      (Plan 3)
+│   ├── infrastructure/            # LAYER 4: frameworks & drivers, no business decisions
+│   │   ├── config/                # env config + .env loader
+│   │   ├── database/              # pgx pool, goose migrations, TxManager, dbtest (embedded Postgres)
+│   │   ├── crypto/                # argon2id hasher, JWT issuer, opaque tokens
+│   │   ├── mail/                  # SMTP + log mailers
+│   │   ├── ratelimit/             # in-memory keyed limiter (Redis adapter later)
+│   │   ├── queue/                 # River client                                                     (Plan 3)
+│   │   ├── audio/                 # WAV codec, resampler                                             (Plan 2)
+│   │   ├── clips/                 # embedded filler / repeat / error clips                           (Plan 4)
+│   │   └── metrics/               # Prometheus collectors                                            (Plan 2+)
+│   ├── bootstrap/                 # composition root: builds each role's object graph
+│   └── archtest/                  # test that enforces the dependency rule
 ├── docs/ design.md  ws-protocol.md
-├── testdata/                     # 16k mono s16le WAVs (hi, en)
+├── testdata/                      # 16k mono s16le WAVs (hi, en)
 ├── Dockerfile  docker-compose.yml  .env.example  .gitignore
-└── README.md                     # setup (native Postgres + compose), architecture, protocol, Upcoming Features
+└── README.md                      # setup, architecture, protocol, Upcoming Features
 ```
 
 Module path: `github.com/bitwizard25/Shiksh_AI`.
@@ -663,9 +664,10 @@ func Retry(ctx context.Context, attempts int, budget time.Duration, fn func(cont
 ## 18. LLD diagrams
 
 > These are Mermaid diagrams, so they render on GitHub. They restate §3–§13 visually. If a diagram and the text disagree, the text wins.
-> Added after approval: `cmd/devdb` runs a local Postgres with no Docker, and `internal/store/storetest` provides an embedded Postgres for tests. Both use `github.com/fergusstrange/embedded-postgres`.
+> Added after approval: `cmd/devdb` runs a local Postgres with no Docker, and `internal/infrastructure/database/dbtest` provides an embedded Postgres for tests. Both use `github.com/fergusstrange/embedded-postgres`.
+> Revision 2: the class names below map onto the Clean layers in §19.1. `auth.Service` becomes `usecase.Auth` + `usecase.Accounts`; `Store` becomes the repositories + `TxManager`; `voice.*` becomes `usecase/conversation` + `adapter/ws`.
 
-### 18.1 Components and package dependencies
+### 18.1 Components and package dependencies (superseded by §19.2)
 
 ```mermaid
 flowchart LR
@@ -1091,3 +1093,150 @@ gantt
     section Masking
     Filler clip if still silent :filler, 1000, 1400
 ```
+
+---
+
+## 19. Revision 2: Clean Architecture and horizontal scaling
+
+**Decisions (user, 2026-09-24):**
+- Classic Clean Architecture layers.
+- Postgres-only scaling behind ports.
+- One binary with role flags.
+
+This section is the authority on architecture and scaling. The earlier sections still hold for behaviour: protocol, state machine, pipeline, schema, API.
+
+### 19.1 Layers and the dependency rule
+
+| Layer | Package | May import | Holds |
+|---|---|---|---|
+| 1. Entities | `internal/entity` | stdlib, `uuid` | Enterprise rules: User, Email value object, password/name/grade rules, Language registry, RefreshToken replay rule, TutoringSession transitions, Message |
+| 2. Use cases | `internal/usecase/...` | entity | Interactors (application rules) and the **ports** (interfaces) they need |
+| 3. Interface adapters | `internal/adapter/...` | usecase, entity, infrastructure | Controllers (HTTP, WS), repositories (SQL), gateways (Bhashini, Gemini), event bus, job workers |
+| 4. Frameworks & drivers | `internal/infrastructure/...` | usecase (to implement ports), entity | DB pool/tx/migrations, crypto, mail, rate limiter, queue, audio, clips, metrics, config |
+| Composition root | `internal/bootstrap`, `cmd/shiksha` | everything | Wiring only |
+
+**Rules:**
+1. **Source dependencies point inward only.** `entity` and `usecase` never import `adapter`, `infrastructure` or `bootstrap`. `internal/archtest` enforces this by parsing imports, so a violation fails `go test`.
+2. **Ports live where they are needed.** `usecase/ports.go` declares them; outer layers implement them. Controllers call use cases, never repositories.
+3. **Transactions without SQL in the core.** A use case calls `TxManager.WithinTx(ctx, fn)`. The database layer carries the `pgx.Tx` in `ctx`, and repositories pick it up with `database.Conn(ctx, pool)`. Multi-repository operations such as a password reset stay atomic while use cases stay SQL-free.
+4. **Time is injected** (`Now func() time.Time`). Time-based rules (refresh reuse grace, expiries) are unit-testable, and repositories store the timestamps they are given.
+5. **Tests follow the layers.** Entities have pure unit tests. Use cases are tested against in-memory fakes of their ports, with no DB. Adapters are tested against real Postgres (embedded).
+6. **Pragmatic Go.** Entities may cross the use-case boundary; there are no mirror DTOs inside the core. Request/response DTOs exist only in `adapter/httpapi`, and later in `adapter/ws`.
+
+**Where the §9–§13 components live now:**
+- **Session actor, turn pipeline, segmenter, TTS pool, persister, timing, hub** go in `usecase/conversation`, because they are application logic.
+- **Frame codec, outbox with the drop rule, conn pumps** go in `adapter/ws`.
+- **Bhashini, Gemini and fake providers, plus the Guard** go in `adapter/gateway`.
+- **Prompt, history and summaries** go in `usecase`.
+- **Sweeper** is replaced by periodic River jobs in `adapter/jobs`.
+
+### 19.2 Dependency diagram (supersedes §18.1)
+
+```mermaid
+flowchart TB
+    root[bootstrap + cmd/shiksha: wiring only]
+    subgraph L4[4. Frameworks and drivers]
+        infra[infrastructure: config, database, crypto, mail, ratelimit, queue, audio, clips, metrics]
+    end
+    subgraph L3[3. Interface adapters]
+        adapters[adapter: httpapi, ws, repository, gateway, bus, jobs]
+    end
+    subgraph L2[2. Use cases]
+        uc[usecase: auth, accounts, catalog, sessions, summaries, conversation + ports]
+    end
+    subgraph L1[1. Entities]
+        ent[entity: User, Email, Language, RefreshToken, TutoringSession, Message]
+    end
+    root --> infra
+    root --> adapters
+    root --> uc
+    adapters --> infra
+    adapters --> uc
+    infra --> uc
+    uc --> ent
+    adapters --> ent
+    infra --> ent
+```
+
+### 19.3 Ports catalogue
+
+| Port | Declared in | Implemented by | Plan |
+|---|---|---|---|
+| `UserRepository`, `TokenRepository` | usecase | adapter/repository (Postgres) | 1 |
+| `TxManager` | usecase | infrastructure/database | 1 |
+| `PasswordHasher`, `AccessTokens`, `OpaqueTokens` | usecase | infrastructure/crypto | 1 |
+| `Mailer` | usecase | infrastructure/mail (SMTP, log) | 1 |
+| `RateLimiter` | adapter/httpapi (consumer side) | infrastructure/ratelimit (memory now, Redis later) | 1 |
+| `SessionRepository`, `MessageRepository`, `TicketRepository` | usecase | adapter/repository | 3 |
+| `JobQueue` (enqueue inside the caller's tx) | usecase | infrastructure/queue (River) | 3 |
+| `EventBus` (session control: end / replace) | usecase | adapter/bus (LISTEN/NOTIFY) | 3 |
+| `ASR`, `LLM`, `TTS` | usecase/conversation | adapter/gateway/{bhashini, gemini, fake} | 2 / 4 |
+| `Output` (turn-tagged events) | usecase/conversation | adapter/ws (outbox + frame codec) | 4 |
+| `Clips` | usecase/conversation | infrastructure/clips | 4 |
+
+### 19.4 Runtime roles (one binary)
+
+- `shiksha serve --roles=api,realtime,worker` starts the listed roles. The default is every role this build knows, so local dev runs everything in one process.
+- `shiksha migrate` applies migrations and exits; run it as a release step in production.
+- `serve --migrate` (the default in dev) migrates on start. The goose advisory lock makes concurrent starts safe.
+
+| Role | Serves | State | Scale on |
+|---|---|---|---|
+| `api` | REST `/v1/*` | Stateless (JWT verified locally, no DB hit) | Request rate, CPU (argon2id) |
+| `realtime` | WS `/v1/ws` | Per-connection actors; any instance can host any session, and sessions resume from the DB | Concurrent sessions |
+| `worker` | River jobs: `summarize_session`, `send_email`, `sweep_stale_sessions` (periodic), `purge_expired` (periodic) | Stateless | Queue depth |
+
+Every role also runs the admin listener (`/healthz`, `/readyz`, `/metrics`) and drains gracefully on SIGTERM.
+
+### 19.5 Cross-instance coordination on Postgres (no Redis)
+
+- **Session-control bus.** Messages look like `NOTIFY session_control, '{"session_id":"…","action":"end|replace","epoch":N}'`.
+  - Each realtime instance holds one dedicated LISTEN connection and forwards events to its local hub for the sessions it hosts. That connection is direct, not through a transaction-pooling PgBouncer.
+  - `replace`: the new connection bumps `conn_epoch` and publishes; the old instance closes with 4009.
+  - `end`: REST `/end` publishes from any api instance.
+- **Missed notifications are harmless.** A listener may miss events while reconnecting. The `conn_epoch` fence rejects straggler writes (§6), the sweeper job ends idle sessions, and after reconnecting the hub re-reads the status of every session it hosts.
+- **Jobs (River on Postgres), transactional outbox.** A job is enqueued **in the same transaction** as the write that triggers it. For example, the password-reset token and its `send_email` job commit together. Periodic jobs use River's periodic and unique jobs, so exactly one instance runs each cluster-wide. This replaces the §13 sweeper goroutine.
+- **Rate limiting.** The `RateLimiter` port has an in-memory adapter per instance, so the effective limit is limit × instances. That still bounds brute force at MVP scale. The upgrade is a Redis adapter with no core changes.
+- **Provider concurrency.** Guard semaphores are per instance. Set `PROVIDER_MAX_CONCURRENCY` to roughly the provider quota divided by the number of realtime instances.
+- **Caches** (Bhashini service config) are per instance and cheap to refetch.
+
+### 19.6 Data tier
+
+- **Connections:** one pgxpool per instance (`pool_max_conns` in `DATABASE_URL`), with the total kept under Postgres `max_connections`. api and worker pools can go through PgBouncer in transaction mode. The realtime LISTEN connection and River's notifier stay on direct connections.
+- **Indexes and pagination:** every hot query is indexed (§6), and pagination is keyset only, never OFFSET.
+- **Growth:** `messages` grows fastest. Partition it monthly on `created_at` once it passes about 50M rows.
+- **Read replicas** can serve session-history reads later. Writes, tickets, epochs and jobs stay on the primary.
+
+### 19.7 Capacity sketch (validated with `voicecli bench` in Plan 5)
+
+- **realtime** is I/O-bound. Worst case per session is about 1.5 MB: the utterance buffer (≤ 960 KB at the 30 s cap) plus in-flight TTS PCM (about 3 × 130 KB). That leaves room for about 1,000 concurrent sessions on a 2 GB instance. CPU goes mostly to base64 and JSON.
+- **The real ceiling is provider quotas** (Bhashini, Gemini RPM/TPM), which the Guard enforces and `/metrics` shows.
+- **api** CPU is dominated by argon2id, capped at 2×NumCPU concurrent hashes (about 19 MiB each).
+
+### 19.8 Deployment topology
+
+```mermaid
+flowchart LR
+    client[Web and mobile clients] --> lb[Load balancer + TLS]
+    lb -->|REST /v1/*| api[api pods x N]
+    lb -->|WebSocket /v1/ws| rt[realtime pods x M]
+    worker[worker pods x K]
+    api --> pg[(Postgres primary)]
+    rt --> pg
+    worker --> pg
+    api -. NOTIFY session_control .-> pg
+    pg -. LISTEN session_control .-> rt
+    rt --> bh[Bhashini ASR / TTS]
+    rt --> gm[Gemini]
+    worker --> gm
+    worker --> smtp[SMTP relay]
+    prom[Prometheus] -.->|scrape :9090| api
+    prom -.->|scrape :9090| rt
+    prom -.->|scrape :9090| worker
+```
+
+### 19.9 Phase changes
+
+- **Plan 1** uses the Clean layout, `TxManager`, `usecase` interactors tested on fakes, the architecture test, `shiksha serve|migrate` with the `api` role, and the in-memory rate limiter behind a port.
+- **Plan 3** adds River (the `worker` role) and the LISTEN/NOTIFY bus. It moves the password-reset email to a `send_email` job enqueued in the reset transaction, and replaces the sweeper goroutine with periodic jobs.
+- **Plan 4** adds the `realtime` role, which subscribes to the bus.
