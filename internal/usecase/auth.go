@@ -251,19 +251,21 @@ func (a *Auth) ForgotPassword(ctx context.Context, email string) error {
 	})
 }
 
-// ResetPassword sets a new password using a reset token. In one transaction it consumes the token,
-// updates the password, invalidates the user's other reset links and signs them out everywhere.
+// ResetPassword sets a new password using a reset token. The password is hashed only after
+// the token is accepted, to prevent bogus tokens from triggering expensive computations.
+// In one transaction it consumes the token, hashes the password, updates it, invalidates
+// the user's other reset links and signs them out everywhere.
 func (a *Auth) ResetPassword(ctx context.Context, token, newPassword string) error {
 	if err := entity.ValidatePassword("new_password", newPassword); err != nil {
-		return err
-	}
-	hash, err := a.d.Hasher.Hash(ctx, newPassword)
-	if err != nil {
 		return err
 	}
 	now := a.d.Now()
 	return a.d.Tx.WithinTx(ctx, func(ctx context.Context) error {
 		userID, err := a.d.Tokens.ConsumePasswordReset(ctx, a.d.Opaque.Hash(token), now)
+		if err != nil {
+			return err
+		}
+		hash, err := a.d.Hasher.Hash(ctx, newPassword)
 		if err != nil {
 			return err
 		}
