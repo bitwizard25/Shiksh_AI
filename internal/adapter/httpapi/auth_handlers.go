@@ -70,6 +70,7 @@ func (a *API) handleRegister(w http.ResponseWriter, r *http.Request) {
 		serviceError(a.log, w, r, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusCreated, authResponse{User: toUserResponse(user), tokenResponse: toTokenResponse(pair)})
 }
 
@@ -95,6 +96,7 @@ func (a *API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		serviceError(a.log, w, r, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, authResponse{User: toUserResponse(user), tokenResponse: toTokenResponse(pair)})
 }
 
@@ -115,6 +117,7 @@ func (a *API) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		serviceError(a.log, w, r, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, toTokenResponse(pair))
 }
 
@@ -145,9 +148,12 @@ func (a *API) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	if !a.allow(w, r, a.limits.Forgot, emailKey(req.Email)) {
 		return
 	}
+	// Every outcome from here on is identical (202, same body), whether the account exists, the
+	// address is malformed, or ForgotPassword failed outright (e.g. the mailer is down). Anything
+	// else would let an attacker use response status as an account-existence oracle. The email is
+	// deliberately not logged alongside the error.
 	if err := a.auth.ForgotPassword(r.Context(), norm.NFC.String(req.Email)); err != nil {
-		serviceError(a.log, w, r, err)
-		return
+		a.log.ErrorContext(r.Context(), "forgot password failed", "err", err, "request_id", requestIDFrom(r.Context()))
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "if the account exists, a reset email has been sent"})
 }
