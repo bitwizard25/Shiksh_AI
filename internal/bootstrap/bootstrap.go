@@ -116,7 +116,9 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 // apiHandler wires the api role: repositories and infrastructure into use cases into controllers.
 func (a *App) apiHandler() http.Handler {
 	users, tokens := repository.NewUsers(a.pool), repository.NewTokens(a.pool)
-	hasher := crypto.NewArgon2Hasher(2 * runtime.NumCPU())
+	// GOMAXPROCS honors a container CPU quota (e.g. Kubernetes cpu limits via GOMAXPROCS or an
+	// automaxprocs-style setter), unlike NumCPU, which always reports the host's core count.
+	hasher := crypto.NewArgon2Hasher(2 * runtime.GOMAXPROCS(0))
 	auth := usecase.NewAuth(usecase.AuthDeps{
 		Users:  users,
 		Tokens: tokens,

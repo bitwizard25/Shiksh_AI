@@ -30,7 +30,7 @@
 - **Time:** use cases take time from an injected `Now func() time.Time`, and repositories store the timestamps they are given.
 - **HTTP:** stdlib `net/http` ServeMux with method patterns. No web framework.
 - **SQL:** hand-written with `pgx/v5`; goose v3 migrations from an embedded FS; no ORM, no sqlc.
-- **Passwords:** argon2id, m=19 MiB (19456 KiB), t=2, p=1, 16-byte salt, 32-byte key, PHC string. Concurrent hashes are limited by a semaphore of 2×NumCPU.
+- **Passwords:** argon2id, m=19 MiB (19456 KiB), t=2, p=1, 16-byte salt, 32-byte key, PHC string. Concurrent hashes are limited by a semaphore of 2×GOMAXPROCS (container-aware).
 - **Access JWT:** HS256, `iss=shiksha-ai`, `aud=api`, TTL 15m. `JWT_SECRET` must be ≥ 32 bytes.
 - **Refresh token:** 32 random bytes, base64url, stored as sha256, TTL 720h. It rotates on every use with a **20 s reuse grace**. Reuse after the grace window revokes the whole family.
 - **Password reset token:** 32 random bytes, stored as sha256, 30 min TTL, single use. A reset invalidates the user's other reset tokens and revokes all their refresh tokens, atomically.
