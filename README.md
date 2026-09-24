@@ -46,7 +46,9 @@ go run ./cmd/devdb
 In a second terminal:
 
 ```powershell
-Copy-Item .env.example .env   # then set JWT_SECRET to a random 32+ character string
+Copy-Item .env.example .env
+# .env.example ships with no JWT_SECRET (there is no safe default). Generate one and set it in .env:
+[Convert]::ToBase64String((1..48 | % { Get-Random -Max 256 }))
 go run ./cmd/shiksha serve
 ```
 
@@ -62,7 +64,9 @@ Invoke-RestMethod -Uri http://localhost:9090/readyz
 ## Run with Docker
 
 ```bash
-cp .env.example .env   # set JWT_SECRET
+cp .env.example .env
+# .env.example ships with no JWT_SECRET (there is no safe default). Generate one and set it in .env:
+openssl rand -base64 48
 docker compose up --build
 ```
 
