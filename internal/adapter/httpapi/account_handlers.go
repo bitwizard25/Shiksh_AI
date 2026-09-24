@@ -44,8 +44,14 @@ type deleteMeRequest struct {
 }
 
 func (a *API) handleDeleteMe(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+	if !a.allow(w, r, a.limits.LoginIP, limiterIP(clientIP(r, a.trustProxy))) {
+		return
+	}
 	var req deleteMeRequest
 	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if !a.allow(w, r, a.limits.DeleteAccount, userID.String()) {
 		return
 	}
 	if err := a.accounts.DeleteAccount(r.Context(), userID, req.Password); err != nil {
