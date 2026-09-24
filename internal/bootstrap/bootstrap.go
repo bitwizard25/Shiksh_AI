@@ -101,12 +101,12 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 	ready.Store(false)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownTimeout)
 	defer cancel()
+	errs := []error{runErr}
 	for _, s := range servers {
-		s.Shutdown(shutdownCtx)
+		errs = append(errs, s.Shutdown(shutdownCtx))
 	}
 	wg.Wait()
 	close(errCh)
-	errs := []error{runErr}
 	for err := range errCh {
 		errs = append(errs, err)
 	}
