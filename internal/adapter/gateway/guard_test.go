@@ -5,6 +5,7 @@ import (
 	"errors"
 	"iter"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -379,6 +380,28 @@ func TestNewHTTPClient(t *testing.T) {
 	tr, ok := c.Transport.(*http.Transport)
 	if !ok || tr.MaxIdleConnsPerHost != 32 || tr.IdleConnTimeout != 90*time.Second || tr.TLSHandshakeTimeout != 5*time.Second || !tr.ForceAttemptHTTP2 {
 		t.Fatalf("transport = %+v", c.Transport)
+	}
+
+	var secondHit bool
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondHit = true
+	}))
+	defer second.Close()
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, second.URL, http.StatusFound)
+	}))
+	defer first.Close()
+
+	resp, err := c.Get(first.URL)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want the 302 itself (no redirect followed)", resp.StatusCode)
+	}
+	if secondHit {
+		t.Fatal("the redirect was followed; the second server was hit")
 	}
 }
 

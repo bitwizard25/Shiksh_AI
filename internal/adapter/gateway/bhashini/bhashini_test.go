@@ -115,7 +115,7 @@ func TestSynthesizeDecodesWAVAtItsOwnRate(t *testing.T) {
 	pcm := make([]byte, 2400*2) // 100 ms at 24 kHz
 	f.setCompute(func(w http.ResponseWriter, r *http.Request, body computeRequest) {
 		task := body.PipelineTasks[0]
-		if task.TaskType != taskTTS || task.Config.ServiceID != "tts-hi" || task.Config.Gender != "female" {
+		if task.TaskType != taskTTS || task.Config.ServiceID != "tts-hi" || task.Config.Gender != "female" || task.Config.AudioFormat != "wav" {
 			t.Errorf("task = %+v", task)
 		}
 		if src := body.InputData.Input[0].Source; src == nil || *src != "नमस्ते" {
@@ -149,6 +149,18 @@ func TestSynthesizeRawPCMWithoutRateFails(t *testing.T) {
 	})
 	if _, err := f.client().Synthesize(context.Background(), conversation.TTSRequest{Lang: "hi", Text: "x"}); err == nil {
 		t.Fatal("raw PCM without a sampling rate was accepted")
+	}
+}
+
+func TestSynthesizeRejectsUnsupportedRawAudioFormat(t *testing.T) {
+	f := newFakeServer(t)
+	f.setCompute(func(w http.ResponseWriter, r *http.Request, body computeRequest) {
+		writeJSON(w, computeResponse{PipelineResponse: []taskResponse{{
+			TaskType: taskTTS, Audio: []audioInput{{AudioContent: b64([]byte{1, 2, 3, 4})}}, Config: &audioConfig{AudioFormat: "mp3", SamplingRate: 22050},
+		}}})
+	})
+	if _, err := f.client().Synthesize(context.Background(), conversation.TTSRequest{Lang: "hi", Text: "x"}); err == nil {
+		t.Fatal("mp3-labelled raw audio was accepted")
 	}
 }
 
@@ -204,6 +216,23 @@ func TestComputeErrorMapping(t *testing.T) {
 		if strings.Contains(err.Error(), "inference-key-1") || strings.Contains(err.Error(), "ulca-key") {
 			t.Errorf("status %d: error leaks a secret: %v", tc.status, err)
 		}
+	}
+}
+
+func TestComputeErrorBodyRedactsInferenceKey(t *testing.T) {
+	f := newFakeServer(t)
+	f.setCompute(func(w http.ResponseWriter, r *http.Request, body computeRequest) {
+		http.Error(w, "bad request, saw header value inference-key-1", http.StatusBadRequest)
+	})
+	_, err := f.client().Synthesize(context.Background(), conversation.TTSRequest{Lang: "hi", Text: "x"})
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if strings.Contains(err.Error(), "inference-key-1") {
+		t.Fatalf("err leaks the inference key: %v", err)
+	}
+	if !strings.Contains(err.Error(), "[redacted]") {
+		t.Fatalf("err does not mark the redaction: %v", err)
 	}
 }
 
