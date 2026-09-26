@@ -22,7 +22,7 @@ func TestBuildFakeProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	prov, err := BuildProviders(ctx, cfg, prometheus.NewRegistry())
+	prov, err := BuildProviders(ctx, cfg, prometheus.NewRegistry(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestBuildRealProvidersWarmsBhashini(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	prov, err := BuildProviders(ctx, cfg, prometheus.NewRegistry())
+	prov, err := BuildProviders(ctx, cfg, prometheus.NewRegistry(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestBuildRealProvidersWarmsBhashini(t *testing.T) {
 }
 
 func TestBuildProvidersRejectsUnknownMode(t *testing.T) {
-	if _, err := BuildProviders(context.Background(), config.ProviderConfig{Mode: "magic"}, nil); err == nil {
+	if _, err := BuildProviders(context.Background(), config.ProviderConfig{Mode: "magic"}, nil, nil); err == nil {
 		t.Fatal("unknown mode accepted")
 	}
 }

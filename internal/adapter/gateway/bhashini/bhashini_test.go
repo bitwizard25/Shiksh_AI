@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -284,6 +285,53 @@ func TestWarmStopsForUnsupportedLanguage(t *testing.T) {
 	time.Sleep(60 * time.Millisecond) // six retry intervals
 	if cfg, _ := f.counts(); cfg != 1 || c.Available("xx") {
 		t.Fatalf("config calls = %d, available = %v; want 1 call and unavailable", cfg, c.Available("xx"))
+	}
+}
+
+func TestWarmLogsRetryWarnings(t *testing.T) {
+	f := newFakeServer(t)
+	f.configFail = 2
+	var buf syncBuffer
+	c := f.clientWithLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Warm(ctx, []string{"hi"})
+	eventually(t, "hi available", func() bool { return c.Available("hi") })
+
+	out := buf.String()
+	warnLines := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "level=WARN") && strings.Contains(line, "lang=hi") {
+			warnLines++
+		}
+	}
+	if warnLines != 2 {
+		t.Fatalf("warn lines with lang=hi = %d, want 2\n%s", warnLines, out)
+	}
+	if strings.Contains(out, "ulca-key") || strings.Contains(out, "inference-key-1") {
+		t.Fatalf("Warm's log leaks a secret:\n%s", out)
+	}
+}
+
+func TestWarmLogsUnavailableLanguageInfo(t *testing.T) {
+	f := newFakeServer(t)
+	f.tasks["xx"] = []string{"asr"} // ASR only, no TTS
+	var buf syncBuffer
+	c := f.clientWithLogger(slog.New(slog.NewTextHandler(&buf, nil)))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c.Warm(ctx, []string{"xx"})
+	eventually(t, "xx logged", func() bool { return strings.Contains(buf.String(), "lang=xx") })
+
+	out := buf.String()
+	infoLines := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "level=INFO") && strings.Contains(line, "lang=xx") {
+			infoLines++
+		}
+	}
+	if infoLines != 1 {
+		t.Fatalf("info lines with lang=xx = %d, want 1\n%s", infoLines, out)
 	}
 }
 

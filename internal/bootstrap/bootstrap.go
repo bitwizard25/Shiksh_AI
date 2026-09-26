@@ -56,7 +56,7 @@ func (a *App) Migrate(ctx context.Context) error { return database.Migrate(ctx, 
 // Run starts the admin listener plus the given roles. It blocks until ctx is cancelled or a
 // server fails, then shuts every server down gracefully within cfg.ShutdownTimeout.
 func (a *App) Run(ctx context.Context, roles []Role) error {
-	prov, err := BuildProviders(ctx, a.cfg.Providers, prometheus.DefaultRegisterer)
+	prov, err := BuildProviders(ctx, a.cfg.Providers, prometheus.DefaultRegisterer, a.log)
 	if err != nil {
 		return fmt.Errorf("build providers: %w", err)
 	}

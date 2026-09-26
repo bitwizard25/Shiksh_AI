@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -29,8 +30,10 @@ type Providers struct {
 
 // BuildProviders builds fake or real providers from cfg and registers their metrics on reg (nil:
 // unregistered). For real providers it starts resolving Bhashini's per-language configuration in
-// the background for as long as ctx lives; a language reports unavailable until that succeeds.
-func BuildProviders(ctx context.Context, cfg config.ProviderConfig, reg prometheus.Registerer) (Providers, error) {
+// the background for as long as ctx lives; a language reports unavailable until that succeeds. log
+// receives provider warnings, such as a failed Bhashini config fetch during warming (nil discards
+// them).
+func BuildProviders(ctx context.Context, cfg config.ProviderConfig, reg prometheus.Registerer, log *slog.Logger) (Providers, error) {
 	m := gateway.NewMetrics(reg)
 	switch cfg.Mode {
 	case config.ProvidersFake:
@@ -47,6 +50,7 @@ func BuildProviders(ctx context.Context, cfg config.ProviderConfig, reg promethe
 		speech := bhashini.New(bhashini.Config{
 			UserID: cfg.BhashiniUserID, ULCAKey: cfg.BhashiniULCAKey,
 			PipelineID: cfg.BhashiniPipelineID, ConfigURL: cfg.BhashiniConfigURL, HTTPClient: client,
+			Logger: log,
 		})
 		llm, err := gemini.New(ctx, gemini.Config{
 			APIKey: cfg.GeminiAPIKey, Model: cfg.GeminiModel, Temperature: cfg.Temperature(),

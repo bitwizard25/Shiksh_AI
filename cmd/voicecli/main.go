@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -69,7 +70,8 @@ func run(ctx context.Context, args []string, env map[string]string, out io.Write
 	if err != nil {
 		return err
 	}
-	prov, err := bootstrap.BuildProviders(ctx, cfg, nil)
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	prov, err := bootstrap.BuildProviders(ctx, cfg, nil, log)
 	if err != nil {
 		return err
 	}

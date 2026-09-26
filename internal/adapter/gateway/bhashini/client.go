@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -37,6 +38,7 @@ type Config struct {
 	HTTPClient   *http.Client  // nil uses http.DefaultClient
 	CacheTTL     time.Duration // default 6h
 	RetryBackoff time.Duration // first delay between Warm retries; default 1s, doubling up to 5m
+	Logger       *slog.Logger  // nil discards
 }
 
 // Client talks to Bhashini. It is safe for concurrent use.
@@ -77,6 +79,9 @@ func New(cfg Config) *Client {
 	if cfg.RetryBackoff <= 0 {
 		cfg.RetryBackoff = time.Second
 	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
 	return &Client{cfg: cfg, now: time.Now, cache: map[cacheKey]service{}, available: map[string]bool{}, refreshing: map[string]bool{}}
 }
 
@@ -112,9 +117,17 @@ func (c *Client) Warm(ctx context.Context, langs []string) {
 func (c *Client) warm(ctx context.Context, lang string) {
 	backoff := c.cfg.RetryBackoff
 	for {
-		if err := c.fetch(ctx, lang); err == nil || ctx.Err() != nil {
+		err := c.fetch(ctx, lang)
+		if err == nil {
+			if !c.Available(lang) {
+				c.cfg.Logger.Info("bhashini pipeline does not offer ASR and TTS for this language; it stays unavailable", "lang", lang)
+			}
 			return
 		}
+		if ctx.Err() != nil {
+			return
+		}
+		c.cfg.Logger.Warn("bhashini config fetch failed; retrying", "lang", lang, "err", err, "retry_in", backoff)
 		t := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():

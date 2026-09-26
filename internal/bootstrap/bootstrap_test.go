@@ -38,7 +38,7 @@ func testApp(t *testing.T) *App {
 
 func testProviders(t *testing.T, a *App) Providers {
 	t.Helper()
-	prov, err := BuildProviders(context.Background(), a.cfg.Providers, prometheus.NewRegistry())
+	prov, err := BuildProviders(context.Background(), a.cfg.Providers, prometheus.NewRegistry(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
