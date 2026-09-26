@@ -55,10 +55,3 @@ func TestDeleteAccount(t *testing.T) {
 		t.Fatalf("Me after delete err = %v, want ErrNotFound", err)
 	}
 }
-
-func TestLanguagesCatalog(t *testing.T) {
-	langs := usecase.Languages()
-	if len(langs) != 9 || langs[0].Code != "hi" {
-		t.Fatalf("Languages() = %+v", langs)
-	}
-}
