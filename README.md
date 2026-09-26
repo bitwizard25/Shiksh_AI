@@ -87,6 +87,20 @@ go test -race ./...
 - **Adapter and infrastructure tests** start a real embedded Postgres, with no Docker. The first run downloads the binaries; run `go test ./internal/infrastructure/database/...` once on its own before the full suite, so the download doesn't race across packages.
 - **Existing server:** set `TEST_DATABASE_URL` to a role with `CREATEDB` to test against it instead.
 
+## Speech and language providers
+
+`PROVIDERS=fake` (the default) simulates speech recognition, the tutor model and speech synthesis, so everything runs without keys. `PROVIDERS=real` uses Bhashini (ASR + TTS) and Gemini and needs `BHASHINI_USER_ID`, `BHASHINI_ULCA_API_KEY` and `GEMINI_API_KEY` in `.env`. Use a paid-tier Gemini key: the learners are minors, and paid-tier data is not used for training. `GET /v1/languages` reports `available: false` for a language until Bhashini has resolved both its ASR and TTS models.
+
+`voicecli` calls the providers directly:
+
+```bash
+go run ./cmd/voicecli tts --lang hi --text "नमस्ते" --out hello.wav
+go run ./cmd/voicecli asr --lang hi --wav testdata/hi_question.wav       # 16 kHz mono WAV
+go run ./cmd/voicecli llm --lang hi --text "भिन्न क्या होता है?"
+go run ./cmd/voicecli assets                                              # regenerate the spoken clips
+go run ./cmd/voicecli latency --lang hi --wav testdata/hi_question.wav --runs 20
+```
+
 ## API (current)
 
 | Method | Path | Auth |
@@ -98,7 +112,7 @@ go test -race ./...
 | POST | `/v1/auth/password/forgot` | – |
 | POST | `/v1/auth/password/reset` | – |
 | GET / PATCH / DELETE | `/v1/me` | Bearer |
-| GET | `/v1/languages` | – |
+| GET | `/v1/languages` (with `available`) | – |
 | GET | `:9090/healthz`, `:9090/readyz`, `:9090/metrics` | – |
 
 Errors use `{"error":{"code","message","field?","request_id"}}`.
