@@ -3,7 +3,7 @@
 Shiksha AI is a voice-first tutor for Indian-language learners: speech in, model reasoning, speech out. The turn structure and latency budget are designed so a session feels like talking to a person. This repository is the **Go backend**.
 
 - Design (HLD + LLD + diagrams): [docs/design.md](docs/design.md). §19 covers architecture and scaling.
-- Implementation plans: [docs/superpowers/plans/](docs/superpowers/plans/)
+- The build is delivered in five plans; see [Status](#status).
 
 ## Architecture
 
@@ -11,29 +11,39 @@ The code follows classic **Clean Architecture** layers. Source dependencies poin
 
 | Layer | Package | Holds |
 |---|---|---|
-| Entities | `internal/entity` | Enterprise rules: users, emails, languages, refresh-token replay rule |
-| Use cases | `internal/usecase` | Interactors (auth, accounts) and the ports they need |
-| Interface adapters | `internal/adapter` | REST controllers (`httpapi`) and Postgres repositories (`repository`) |
-| Frameworks & drivers | `internal/infrastructure` | Config, database (pool, TxManager, migrations), crypto, mail, rate limiter |
+| Entities | `internal/entity` | Enterprise rules: users, emails, languages (with each one's TTS voice and spoken phrases), refresh-token replay rule |
+| Use cases | `internal/usecase` | Interactors (auth, accounts, language catalog) and the ports they need; `usecase/conversation` holds the speech and language ports (ASR, LLM, TTS) |
+| Interface adapters | `internal/adapter` | REST controllers (`httpapi`), Postgres repositories (`repository`), provider gateways (`gateway`: Bhashini, Gemini, simulated providers, and a guard with a concurrency cap, circuit breaker and metrics) |
+| Frameworks & drivers | `internal/infrastructure` | Config, database (pool, TxManager, migrations), crypto, mail, rate limiter, audio (WAV/PCM) |
 | Composition root | `internal/bootstrap`, `cmd/shiksha` | Wiring and roles |
+| Tools | `cmd/voicecli`, `cmd/devdb` | Provider CLI and latency benchmark; local Postgres for development |
 
 The same binary runs as different **roles**, so each part scales on its own. Coordination goes only through Postgres; no Redis is needed.
 
 ```bash
-shiksha serve --roles=api      # stateless REST API (this plan)
-shiksha serve                  # every role in this build (local dev)
+shiksha serve --roles=api      # stateless REST API
+shiksha serve                  # every role in this build (currently just api)
 shiksha migrate                # apply migrations and exit (release step)
 ```
+
+The `worker` role arrives in Plan 3 and the `realtime` (voice WebSocket) role in Plan 4.
 
 ## Status
 
 | Plan | Scope | State |
 |---|---|---|
-| 1 | Clean skeleton, Postgres, accounts API, admin endpoints, `api` role | ✅ this branch |
-| 2 | Bhashini ASR/TTS + Gemini gateways, latency benchmark gate | next |
-| 3 | Tutoring sessions, prompts, summaries; `worker` role (River jobs), LISTEN/NOTIFY bus | planned |
+| 1 | Clean skeleton, Postgres, accounts API, admin endpoints, `api` role | ✅ done |
+| 2 | Bhashini ASR/TTS + Gemini gateways, provider guard, `voicecli`, latency benchmark gate | ✅ code done; the real-provider latency benchmark is pending API keys |
+| 3 | Tutoring sessions, prompts, summaries; `worker` role (River jobs), LISTEN/NOTIFY bus | next (planned in detail) |
 | 4 | `realtime` role: WebSocket voice core (turn pipeline, barge-in) | planned |
 | 5 | Latency polish, hardening, protocol docs | planned |
+
+**Works today:**
+- Accounts: sign-up, sign-in, rotating refresh tokens, password reset, profile, account deletion.
+- The language catalog, which shows each language's availability.
+- The speech and language provider layer (Bhashini and Gemini, or simulated providers), exercised through `voicecli`.
+
+**Not yet:** tutoring sessions (Plan 3) and the live voice conversation (Plan 4).
 
 ## Run locally (Windows, no Docker)
 
@@ -89,7 +99,14 @@ go test -race ./...
 
 ## Speech and language providers
 
-`PROVIDERS=fake` (the default) simulates speech recognition, the tutor model and speech synthesis, so everything runs without keys. `PROVIDERS=real` uses Bhashini (ASR + TTS) and Gemini and needs `BHASHINI_USER_ID`, `BHASHINI_ULCA_API_KEY` and `GEMINI_API_KEY` in `.env`. Use a paid-tier Gemini key: the learners are minors, and paid-tier data is not used for training. `GET /v1/languages` reports `available: false` for a language until Bhashini has resolved both its ASR and TTS models.
+`PROVIDERS=fake` (the default) simulates speech recognition, the tutor model and speech synthesis, so everything runs without keys. `PROVIDERS=real` uses Bhashini (ASR + TTS) and Gemini and needs `BHASHINI_USER_ID`, `BHASHINI_ULCA_API_KEY` and `GEMINI_API_KEY` in `.env`. Use a paid-tier Gemini key: the learners are minors, and paid-tier data is not used for training. `GET /v1/languages` reports `available: false` for a language until Bhashini has resolved both its ASR and TTS models; failed attempts are logged and retried in the background.
+
+Every provider call goes through a guard with three parts:
+- **A concurrency cap:** `PROVIDER_MAX_CONCURRENCY`, default 64.
+- **A circuit breaker:** after 5 consecutive failures it fails fast for 15 s, then lets one probe call through.
+- **Prometheus metrics** on `:9090/metrics`.
+
+API keys never appear in logs or error messages.
 
 `voicecli` calls the providers directly:
 
@@ -100,6 +117,8 @@ go run ./cmd/voicecli llm --lang hi --text "भिन्न क्या हो�
 go run ./cmd/voicecli assets                                              # regenerate the spoken clips
 go run ./cmd/voicecli latency --lang hi --wav testdata/hi_question.wav --runs 20
 ```
+
+The benchmark's p50/p95 results against the latency budget (p50 ≤ 1.5 s, p95 ≤ 2.5 s) will be recorded in [docs/design.md](docs/design.md) §20 once it has run with real keys.
 
 ## API (current)
 
