@@ -98,7 +98,7 @@ func TestDecodeRejects(t *testing.T) {
 			continue
 		}
 		if tc.want != nil && !errors.Is(err, tc.want) {
-			t.Errorf("%s: err = %v, want %v", err, err, tc.want)
+			t.Errorf("%s: err = %v, want %v", name, err, tc.want)
 		}
 	}
 }
