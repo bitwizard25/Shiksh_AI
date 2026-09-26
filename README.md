@@ -5,6 +5,27 @@ Shiksha AI is a voice-first tutor for Indian-language learners: speech in, model
 - Design (HLD + LLD + diagrams): [docs/design.md](docs/design.md). §19 covers architecture and scaling.
 - The build is delivered in five plans; see [Status](#status).
 
+## How it works
+
+A learner asks a question out loud and hears the tutor answer in the same language, and can interrupt it at any time:
+
+```mermaid
+flowchart LR
+    mic[Learner speaks] -->|PCM audio over WebSocket| asr[Bhashini ASR]
+    asr -->|transcript| llm[Gemini, streaming]
+    llm -->|sentences as they arrive| tts[Bhashini TTS, 3 in parallel]
+    tts -->|audio frames| spk[Learner hears the reply]
+    spk -. barge-in: learner talks over it .-> mic
+```
+
+- **Latency target:** the first audio of the reply goes out at most 1.5 s (p50) and 2.5 s (p95) after the learner stops speaking.
+- **How it gets there:** audio streams while the learner talks, the model replies in a stream, the first short clause is spoken early, and TTS runs ahead of playback.
+- **What exists today:** the providers and the benchmark tool. The live voice path arrives in Plan 4.
+
+## Supported languages
+
+Hindi, Marathi, Bengali, Tamil, Telugu, Gujarati, Kannada, Malayalam and English. The tutor replies in the learner's language and script, and each language has its own voice and short spoken phrases, such as fillers and "please say that again".
+
 ## Architecture
 
 The code follows classic **Clean Architecture** layers. Source dependencies point inward only, and `internal/archtest` fails the build if they don't.
@@ -44,6 +65,16 @@ The `worker` role arrives in Plan 3 and the `realtime` (voice WebSocket) role in
 - The speech and language provider layer (Bhashini and Gemini, or simulated providers), exercised through `voicecli`.
 
 **Not yet:** tutoring sessions (Plan 3) and the live voice conversation (Plan 4).
+
+## Tech stack
+
+- **Language and HTTP:** Go 1.27; standard-library `net/http` routing.
+- **Database:** Postgres through `pgx` v5, with `goose` migrations embedded in the binary.
+- **Auth:** argon2id password hashing and HS256 JWTs (`golang-jwt`); `x/time/rate` limiters.
+- **Speech and language:** Bhashini ULCA (ASR/TTS) over REST; Gemini through Google's `genai` SDK.
+- **Observability:** Prometheus metrics and structured `slog` JSON logs.
+- **Tests:** a real embedded Postgres, so no Docker is needed, and the race detector on every run.
+- **Coming in Plan 3:** River (a Postgres-backed job queue) and Postgres LISTEN/NOTIFY.
 
 ## Run locally (Windows, no Docker)
 
@@ -135,6 +166,20 @@ The benchmark's p50/p95 results against the latency budget (p50 ≤ 1.5 s, p95 �
 | GET | `:9090/healthz`, `:9090/readyz`, `:9090/metrics` | – |
 
 Errors use `{"error":{"code","message","field?","request_id"}}`.
+
+## Security
+
+- **Passwords:** hashed with argon2id, after Unicode normalization so that different encodings of the same Indic-script text match.
+- **Tokens:**
+  - Access tokens last 15 minutes. Refresh tokens are opaque and rotate on every use, and only their hashes are stored.
+  - Reusing a rotated refresh token after a 20-second grace window revokes the whole token family.
+- **No account enumeration:**
+  - Login costs the same time for unknown emails.
+  - Forgot-password always answers 202, even when something fails internally.
+- **Rate limits and input checks:**
+  - Rate limits on register, login, refresh, password reset and account deletion.
+  - Strict JSON bodies (1 MB cap, unknown fields rejected), and display names that reject control and bidi-override characters.
+- **Secrets:** provider API keys are redacted from logs and error messages, and HTTP redirects are refused so keys are never forwarded to another host.
 
 ## Upcoming features
 
