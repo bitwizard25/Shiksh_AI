@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/config"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/database/dbtest"
@@ -33,8 +36,18 @@ func testApp(t *testing.T) *App {
 	return &App{cfg: cfg, log: slog.New(slog.NewTextHandler(io.Discard, nil)), pool: dbtest.NewPool(t)}
 }
 
+func testProviders(t *testing.T, a *App) Providers {
+	t.Helper()
+	prov, err := BuildProviders(context.Background(), a.cfg.Providers, prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return prov
+}
+
 func TestAPIHandlerIsFullyWired(t *testing.T) {
-	srv := httptest.NewServer(testApp(t).apiHandler())
+	a := testApp(t)
+	srv := httptest.NewServer(a.apiHandler(testProviders(t, a)))
 	defer srv.Close()
 	body := `{"email":"asha@example.com","password":"correct horse","display_name":"Asha","terms_accepted":true}`
 	resp, err := http.Post(srv.URL+"/v1/auth/register", "application/json", strings.NewReader(body))
@@ -44,6 +57,22 @@ func TestAPIHandlerIsFullyWired(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register through the wired stack = %d, want 201", resp.StatusCode)
+	}
+
+	langsResp, err := http.Get(srv.URL + "/v1/languages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer langsResp.Body.Close()
+	var langs []struct {
+		Code      string `json:"code"`
+		Available bool   `json:"available"`
+	}
+	if err := json.NewDecoder(langsResp.Body).Decode(&langs); err != nil {
+		t.Fatal(err)
+	}
+	if len(langs) != 9 || !langs[0].Available {
+		t.Fatalf("languages through the wired stack = %+v", langs)
 	}
 }
 
