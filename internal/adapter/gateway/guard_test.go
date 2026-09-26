@@ -381,3 +381,53 @@ func TestNewHTTPClient(t *testing.T) {
 		t.Fatalf("transport = %+v", c.Transport)
 	}
 }
+
+func TestPanicDoesNotLeakSlotOrWedgeProbe(t *testing.T) {
+	g, reg, clock := newTestGuard(t, GuardConfig{MaxConcurrency: 1, FailureThreshold: 1})
+	stub := &stubASR{fn: func(context.Context) error { panic("provider bug") }}
+	asr := g.ASR(stub)
+	call := func() (panicked bool) {
+		defer func() {
+			if recover() != nil {
+				panicked = true
+			}
+		}()
+		_, _ = asr.Transcribe(context.Background(), conversation.ASRRequest{})
+		return false
+	}
+	if !call() {
+		t.Fatal("the panic was swallowed; it must propagate")
+	}
+	if v := metricValue(t, reg, "shiksha_breaker_state", "provider", "p"); v != 2 {
+		t.Fatalf("breaker state = %v, want 2 (a panic counts as a failure)", v)
+	}
+	clock.Advance(15 * time.Second)
+	if !call() { // the half-open probe panics too
+		t.Fatal("the probe's panic was swallowed")
+	}
+	clock.Advance(15 * time.Second)
+	stub.fn = func(context.Context) error { return nil }
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := asr.Transcribe(ctx, conversation.ASRRequest{}); err != nil {
+		t.Fatalf("after two panics: err = %v (a slot or the probe leaked)", err)
+	}
+}
+
+func TestStreamConsumerPanicReleasesSlot(t *testing.T) {
+	g, _, _ := newTestGuard(t, GuardConfig{MaxConcurrency: 1})
+	llm := g.LLM(stubLLM{deltas: []string{"a", "b"}})
+	func() {
+		defer func() { _ = recover() }()
+		for range llm.Stream(context.Background(), conversation.LLMRequest{}) {
+			panic("consumer bug")
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for _, err := range llm.Stream(ctx, conversation.LLMRequest{}) {
+		if err != nil {
+			t.Fatalf("second stream: %v (slot leaked after a consumer panic)", err)
+		}
+	}
+}

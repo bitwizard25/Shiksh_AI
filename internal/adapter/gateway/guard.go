@@ -149,7 +149,14 @@ func (l guardedLLM) Stream(ctx context.Context, req conversation.LLMRequest) ite
 		var (
 			streamErr error
 			stopped   bool
+			recorded  bool
 		)
+		defer func() {
+			if !recorded { // the provider or the consumer panicked: count it as a failure
+				g.record(probe, outcomeError)
+				g.count(opLLMStream, outcomeError)
+			}
+		}()
 		func() {
 			defer g.release()
 			start, first := g.now(), true
@@ -174,13 +181,16 @@ func (l guardedLLM) Stream(ctx context.Context, req conversation.LLMRequest) ite
 		}
 		g.record(probe, outcome)
 		g.count(opLLMStream, outcome)
+		recorded = true
 		if streamErr != nil {
 			yield(conversation.Delta{}, streamErr)
 		}
 	}
 }
 
-// do runs one unary call under the guard.
+// do runs one unary call under the guard. The slot release and the breaker bookkeeping are
+// deferred, so a panicking provider call (recovered further up) neither leaks a slot nor leaves
+// a half-open probe stuck; the panic counts as a failure and keeps propagating.
 func (g *Guard) do(ctx context.Context, op string, fn func(context.Context) error) error {
 	probe, err := g.admit(op)
 	if err != nil {
@@ -192,15 +202,18 @@ func (g *Guard) do(ctx context.Context, op string, fn func(context.Context) erro
 		g.count(op, outcomeCanceled)
 		return err
 	}
+	outcome := outcomeError // stays error if fn panics
+	defer func() {
+		g.release()
+		g.record(probe, outcome)
+		g.count(op, outcome)
+	}()
 	start := g.now()
 	err = fn(ctx)
-	g.release()
-	outcome := classify(ctx, err)
+	outcome = classify(ctx, err)
 	if outcome != outcomeCanceled {
 		g.observe(op, g.now().Sub(start))
 	}
-	g.record(probe, outcome)
-	g.count(op, outcome)
 	return err
 }
 
