@@ -306,7 +306,31 @@ func TestLanguages(t *testing.T) {
 	if code := s.do(t, "GET", "/v1/languages", "", nil, &langs); code != 200 {
 		t.Fatalf("status = %d", code)
 	}
-	if len(langs) != 9 || langs[0].Code != "hi" || langs[0].NativeName != "हिन्दी" {
+	if len(langs) != 9 || langs[0].Code != "hi" || langs[0].NativeName != "हिन्दी" || !langs[0].Available {
+		t.Fatalf("languages = %+v", langs)
+	}
+}
+
+type availabilityStub map[string]bool
+
+func (a availabilityStub) Available(code string) bool { return a[code] }
+
+func TestLanguagesReportProviderAvailability(t *testing.T) {
+	srv := httptest.NewServer(New(Options{
+		Log:     discardLog,
+		Catalog: usecase.NewCatalog([]string{"hi", "en"}, availabilityStub{"hi": true}),
+	}))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/languages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var langs []languageResponse
+	if err := json.NewDecoder(resp.Body).Decode(&langs); err != nil {
+		t.Fatal(err)
+	}
+	if len(langs) != 2 || langs[0].Code != "hi" || !langs[0].Available || langs[1].Code != "en" || langs[1].Available {
 		t.Fatalf("languages = %+v", langs)
 	}
 }

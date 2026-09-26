@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/bitwizard25/Shiksh_AI/internal/adapter/httpapi"
 	"github.com/bitwizard25/Shiksh_AI/internal/adapter/repository"
@@ -55,6 +56,14 @@ func (a *App) Migrate(ctx context.Context) error { return database.Migrate(ctx, 
 // Run starts the admin listener plus the given roles. It blocks until ctx is cancelled or a
 // server fails, then shuts every server down gracefully within cfg.ShutdownTimeout.
 func (a *App) Run(ctx context.Context, roles []Role) error {
+	prov, err := BuildProviders(ctx, a.cfg.Providers, prometheus.DefaultRegisterer)
+	if err != nil {
+		return fmt.Errorf("build providers: %w", err)
+	}
+	if a.cfg.Providers.Mode == config.ProvidersFake {
+		a.log.Warn("PROVIDERS=fake: speech and language are simulated; set PROVIDERS=real with the Bhashini and Gemini keys for real providers")
+	}
+
 	var ready atomic.Bool
 	servers := []*http.Server{{
 		Addr:              a.cfg.AdminAddr,
@@ -66,7 +75,7 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 		case RoleAPI:
 			servers = append(servers, &http.Server{
 				Addr:              a.cfg.HTTPAddr,
-				Handler:           a.apiHandler(),
+				Handler:           a.apiHandler(prov),
 				ReadHeaderTimeout: 10 * time.Second,
 				IdleTimeout:       120 * time.Second,
 				// No WriteTimeout: the realtime role (Plan 4) serves long-lived WebSockets.
@@ -114,7 +123,7 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 }
 
 // apiHandler wires the api role: repositories and infrastructure into use cases into controllers.
-func (a *App) apiHandler() http.Handler {
+func (a *App) apiHandler(prov Providers) http.Handler {
 	users, tokens := repository.NewUsers(a.pool), repository.NewTokens(a.pool)
 	// GOMAXPROCS honors a container CPU quota (e.g. Kubernetes cpu limits via GOMAXPROCS or an
 	// automaxprocs-style setter), unlike NumCPU, which always reports the host's core count.
@@ -136,6 +145,7 @@ func (a *App) apiHandler() http.Handler {
 	return httpapi.New(httpapi.Options{
 		Auth:     auth,
 		Accounts: usecase.NewAccounts(users, hasher, nil),
+		Catalog:  usecase.NewCatalog(a.cfg.Providers.EnabledLanguages, prov.Availability),
 		Limits: httpapi.DefaultLimits(func(interval time.Duration, burst int) httpapi.RateLimiter {
 			return ratelimit.NewMemory(interval, burst)
 		}),
