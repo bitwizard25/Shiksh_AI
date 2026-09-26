@@ -192,8 +192,8 @@ func (c *cli) assets(ctx context.Context, args []string) error {
 				return err
 			}
 			note := ""
-			if strings.HasPrefix(clip.file, "filler_") && res.DurationMs > 800 {
-				note = "  <- long for a filler; consider a shorter phrase"
+			if strings.HasPrefix(clip.file, "filler_") && res.DurationMs > 400 {
+				note = "  <- longer than 400 ms; spec §13 wants short fillers"
 			}
 			fmt.Fprintf(c.out, "%s\t%5d ms\t%d Hz\t%q%s\n", path, res.DurationMs, res.SampleRate, clip.text, note)
 		}

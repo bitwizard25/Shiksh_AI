@@ -58,7 +58,7 @@ func TestTranscribeSendsWAVAndReturnsTranscript(t *testing.T) {
 }
 
 func TestPunctuationOnlyTranscriptIsEmpty(t *testing.T) {
-	for _, heard := range []string{" । ", "...", "", "  \n"} {
+	for _, heard := range []string{" । ", "...", "", "  \n", "|", " ♪ "} {
 		f := newFakeServer(t)
 		f.setCompute(func(w http.ResponseWriter, r *http.Request, body computeRequest) {
 			writeJSON(w, computeResponse{PipelineResponse: []taskResponse{{TaskType: taskASR, Output: []textOutput{{Source: heard}}}}})

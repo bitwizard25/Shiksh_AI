@@ -39,7 +39,7 @@ func (c *Client) Transcribe(ctx context.Context, req conversation.ASRRequest) (c
 
 func cleanTranscript(s string) string {
 	s = strings.TrimSpace(s)
-	if strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) }) == "" {
+	if strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) }) == "" {
 		return ""
 	}
 	return s
