@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/audio"
 	"github.com/bitwizard25/Shiksh_AI/internal/usecase/conversation"
@@ -22,7 +23,7 @@ func (c *Client) Synthesize(ctx context.Context, req conversation.TTSRequest) (c
 	err := c.compute(ctx, taskTTS, req.Lang, func(svc service) computeRequest {
 		return computeRequest{
 			PipelineTasks: []pipelineTask{{TaskType: taskTTS, Config: taskConfig{
-				Language: language{SourceLanguage: req.Lang}, ServiceID: svc.ServiceID, Gender: gender,
+				Language: language{SourceLanguage: req.Lang}, ServiceID: svc.ServiceID, Gender: gender, AudioFormat: "wav",
 			}}},
 			InputData: inputData{Input: []textInput{{Source: &text}}},
 		}
@@ -57,6 +58,9 @@ func decodeTTSAudio(raw []byte, cfg *audioConfig) ([]byte, int, error) {
 	}
 	if cfg == nil || cfg.SamplingRate <= 0 {
 		return nil, 0, errors.New("tts audio is raw PCM without a sampling rate")
+	}
+	if format := cfg.AudioFormat; format != "" && !strings.EqualFold(format, "wav") && !strings.EqualFold(format, "pcm") {
+		return nil, 0, fmt.Errorf("tts audio format %q is not supported", format)
 	}
 	return raw[:len(raw)&^1], cfg.SamplingRate, nil
 }

@@ -15,5 +15,12 @@ func NewHTTPClient() *http.Client {
 	t.IdleConnTimeout = 90 * time.Second
 	t.TLSHandshakeTimeout = 5 * time.Second
 	t.ForceAttemptHTTP2 = true
-	return &http.Client{Transport: t, Timeout: 60 * time.Second}
+	return &http.Client{
+		Transport: t,
+		Timeout:   60 * time.Second,
+		// Custom key headers such as ulcaApiKey and x-goog-api-key would otherwise be forwarded
+		// across a redirect to a different host; provider APIs never redirect, so stop at the
+		// first response instead of following it.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }

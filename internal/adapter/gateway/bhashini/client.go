@@ -280,7 +280,7 @@ func (c *Client) post(ctx context.Context, op, url string, headers map[string]st
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 			return context.Canceled
 		}
-		return &conversation.ProviderError{Provider: provider, Op: op, Retryable: true, Err: errors.New(redactURL(err.Error(), url))}
+		return &conversation.ProviderError{Provider: provider, Op: op, Retryable: true, Err: errors.New(redactHeaders(redactURL(err.Error(), url), headers))}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
@@ -297,7 +297,7 @@ func (c *Client) post(ctx context.Context, op, url string, headers map[string]st
 		return &conversation.ProviderError{
 			Provider: provider, Op: op, Status: resp.StatusCode,
 			Retryable: resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500,
-			Err:       errors.New(snippet(data)),
+			Err:       errors.New(redactHeaders(snippet(data), headers)),
 		}
 	}
 	if err := json.Unmarshal(data, respBody); err != nil {
@@ -319,6 +319,18 @@ func snippet(b []byte) string {
 func redactURL(msg, url string) string {
 	if i := strings.IndexByte(url, '?'); i >= 0 {
 		return strings.ReplaceAll(msg, url, url[:i])
+	}
+	return msg
+}
+
+// redactHeaders replaces every non-empty header value in msg with "[redacted]". The ULCA key and
+// the Bhashini inference key travel as header values, so a provider that echoes the request (an
+// error body, or a transport error that quotes it) never leaks them.
+func redactHeaders(msg string, headers map[string]string) string {
+	for _, v := range headers {
+		if v != "" {
+			msg = strings.ReplaceAll(msg, v, "[redacted]")
+		}
 	}
 	return msg
 }
