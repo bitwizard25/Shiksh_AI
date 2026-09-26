@@ -1,7 +1,9 @@
 package bhashini
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -115,6 +117,34 @@ func (f *fakeServer) client() *Client {
 		UserID: "user-1", ULCAKey: "ulca-key", PipelineID: "pipe-1",
 		ConfigURL: f.srv.URL + "/config", HTTPClient: f.srv.Client(), RetryBackoff: 10 * time.Millisecond,
 	})
+}
+
+// clientWithLogger is like client but logs to log, for tests that assert on Warm's log output.
+func (f *fakeServer) clientWithLogger(log *slog.Logger) *Client {
+	return New(Config{
+		UserID: "user-1", ULCAKey: "ulca-key", PipelineID: "pipe-1",
+		ConfigURL: f.srv.URL + "/config", HTTPClient: f.srv.Client(), RetryBackoff: 10 * time.Millisecond,
+		Logger: log,
+	})
+}
+
+// syncBuffer is a mutex-guarded io.Writer: slog handlers may be written to from Warm's background
+// goroutines while a test concurrently reads the buffer's contents.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func (f *fakeServer) counts() (config, compute int) {
