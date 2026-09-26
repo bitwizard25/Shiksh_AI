@@ -13,7 +13,7 @@ import (
 	"github.com/caarlos0/env/v11"
 )
 
-// Config holds runtime settings. Later plans add provider and voice settings.
+// Config holds runtime settings. Later plans add voice settings.
 type Config struct {
 	HTTPAddr        string        `env:"HTTP_ADDR" envDefault:":8080"`
 	AdminAddr       string        `env:"ADMIN_ADDR" envDefault:":9090"`
@@ -27,6 +27,7 @@ type Config struct {
 	LogLevel        string        `env:"LOG_LEVEL" envDefault:"info"`
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"20s"`
 	SMTP            SMTPConfig
+	Providers       ProviderConfig
 }
 
 // SMTPConfig configures outgoing mail. An empty Host means mail is logged instead of sent.
@@ -50,6 +51,7 @@ func LoadFrom(environ map[string]string) (Config, error) {
 		return Config{}, fmt.Errorf("config: %w", err)
 	}
 	cfg.AllowedOrigins = cleanList(cfg.AllowedOrigins)
+	cfg.Providers.normalize()
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
@@ -68,6 +70,9 @@ func (c Config) Validate() error {
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(c.LogLevel)); err != nil {
 		errs = append(errs, fmt.Errorf("LOG_LEVEL %q must be one of debug, info, warn, error", c.LogLevel))
+	}
+	if err := c.Providers.Validate(); err != nil {
+		errs = append(errs, err)
 	}
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("config: %w", err)

@@ -70,13 +70,14 @@ type languageResponse struct {
 	Code       string `json:"code"`
 	Name       string `json:"name"`
 	NativeName string `json:"native_name"`
+	Available  bool   `json:"available"` // false until the speech providers can serve it
 }
 
 func (a *API) handleLanguages(w http.ResponseWriter, _ *http.Request) {
-	langs := usecase.Languages()
+	langs := a.catalog.Languages()
 	out := make([]languageResponse, 0, len(langs))
 	for _, l := range langs {
-		out = append(out, languageResponse{Code: l.Code, Name: l.Name, NativeName: l.NativeName})
+		out = append(out, languageResponse{Code: l.Code, Name: l.Name, NativeName: l.NativeName, Available: l.Available})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

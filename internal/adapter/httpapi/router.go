@@ -13,6 +13,7 @@ import (
 type Options struct {
 	Auth           *usecase.Auth
 	Accounts       *usecase.Accounts
+	Catalog        *usecase.Catalog // nil offers every language as available
 	Limits         Limits
 	Log            *slog.Logger
 	AllowedOrigins []string
@@ -23,6 +24,7 @@ type Options struct {
 type API struct {
 	auth       *usecase.Auth
 	accounts   *usecase.Accounts
+	catalog    *usecase.Catalog
 	limits     Limits
 	log        *slog.Logger
 	trustProxy bool
@@ -30,7 +32,11 @@ type API struct {
 
 // New returns the public API handler with middleware applied.
 func New(opts Options) http.Handler {
-	a := &API{auth: opts.Auth, accounts: opts.Accounts, limits: opts.Limits, log: opts.Log, trustProxy: opts.TrustProxy}
+	catalog := opts.Catalog
+	if catalog == nil {
+		catalog = usecase.NewCatalog(nil, nil)
+	}
+	a := &API{auth: opts.Auth, accounts: opts.Accounts, catalog: catalog, limits: opts.Limits, log: opts.Log, trustProxy: opts.TrustProxy}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/auth/register", a.handleRegister)
