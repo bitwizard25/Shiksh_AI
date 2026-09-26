@@ -130,3 +130,37 @@ func TestRefreshTokenIsReplay(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryLanguageHasVoiceAndPhrases(t *testing.T) {
+	english, _ := entity.LookupLanguage("en")
+	for _, l := range entity.Languages() {
+		if l.TTSGender != "female" && l.TTSGender != "male" {
+			t.Errorf("%s: TTSGender = %q, want female or male", l.Code, l.TTSGender)
+		}
+		p := l.Phrases
+		if len(p.Fillers) < 2 || p.Repeat == "" || p.Error == "" || p.Redirect == "" {
+			t.Errorf("%s: incomplete phrases %+v", l.Code, p)
+		}
+		for _, f := range p.Fillers {
+			if strings.TrimSpace(f) == "" {
+				t.Errorf("%s: blank filler", l.Code)
+			}
+		}
+		if l.Code != "en" && (p.Repeat == english.Phrases.Repeat || p.Error == english.Phrases.Error || p.Redirect == english.Phrases.Redirect) {
+			t.Errorf("%s: phrases were not translated from English", l.Code)
+		}
+	}
+}
+
+func TestLanguagesAreDeepCopies(t *testing.T) {
+	langs := entity.Languages()
+	langs[0].Phrases.Fillers[0] = "changed"
+	if entity.Languages()[0].Phrases.Fillers[0] == "changed" {
+		t.Fatal("modifying Languages() fillers changed the registry")
+	}
+	hi, _ := entity.LookupLanguage("hi")
+	hi.Phrases.Fillers[0] = "changed"
+	if again, _ := entity.LookupLanguage("hi"); again.Phrases.Fillers[0] == "changed" {
+		t.Fatal("modifying LookupLanguage fillers changed the registry")
+	}
+}
