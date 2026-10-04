@@ -20,3 +20,6 @@ func (e *ValidationError) Error() string { return e.Field + ": " + e.Message }
 
 // ErrSessionEnded is returned when an operation needs a live session but it is already over.
 var ErrSessionEnded = errors.New("session has ended")
+
+// ErrFenced is returned when a write comes from a connection that a newer one has replaced.
+var ErrFenced = errors.New("connection fenced by a newer one")

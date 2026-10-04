@@ -155,3 +155,32 @@ type TicketRepository interface {
 type TextGenerator interface {
 	Complete(ctx context.Context, system, user string) (string, error)
 }
+
+// TurnInsert is one finished turn: the learner's message and the tutor's reply (the text the learner heard).
+type TurnInsert struct {
+	TurnNo  int
+	Learner entity.Message
+	Tutor   entity.Message
+}
+
+// TurnStore is what the realtime session needs from the database. Every write carries the
+// connection epoch it was made under and fails with entity.ErrFenced once a newer connection exists.
+type TurnStore interface {
+	// Connect marks the session active, bumps its connection epoch and returns the new epoch.
+	// entity.ErrNotFound if the session does not exist or has ended.
+	Connect(ctx context.Context, sessionID uuid.UUID, now time.Time) (epoch int, err error)
+	// MaxTurnNo returns the highest stored turn number, or 0 if there are no messages.
+	MaxTurnNo(ctx context.Context, sessionID uuid.UUID) (int, error)
+	// InsertTurn stores both messages and counts the turn, atomically.
+	InsertTurn(ctx context.Context, sessionID uuid.UUID, epoch int, t TurnInsert, now time.Time) error
+	// UpdateTutor rewrites the tutor message of a turn, for example when the learner interrupted late.
+	UpdateTutor(ctx context.Context, sessionID uuid.UUID, epoch, turnNo int, content, status string) error
+	// Touch records activity so the sweeper leaves the session alone.
+	Touch(ctx context.Context, sessionID uuid.UUID, epoch int, now time.Time) error
+}
+
+// LiveSessions reaches sessions whose WebSocket this process hosts.
+type LiveSessions interface {
+	// End asks a live session to finish as ended by the learner. It reports whether one was live here.
+	End(sessionID uuid.UUID) bool
+}

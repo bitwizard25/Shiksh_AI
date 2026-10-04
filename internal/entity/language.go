@@ -10,18 +10,20 @@ type Language struct {
 	Code       string
 	Name       string
 	NativeName string
+	// Redirect is a short spoken sentence that steers the learner back to the lesson.
+	Redirect string
 }
 
 var languages = []Language{
-	{Code: "hi", Name: "Hindi", NativeName: "हिन्दी"},
-	{Code: "mr", Name: "Marathi", NativeName: "मराठी"},
-	{Code: "bn", Name: "Bengali", NativeName: "বাংলা"},
-	{Code: "ta", Name: "Tamil", NativeName: "தமிழ்"},
-	{Code: "te", Name: "Telugu", NativeName: "తెలుగు"},
-	{Code: "gu", Name: "Gujarati", NativeName: "ગુજરાતી"},
-	{Code: "kn", Name: "Kannada", NativeName: "ಕನ್ನಡ"},
-	{Code: "ml", Name: "Malayalam", NativeName: "മലയാളം"},
-	{Code: "en", Name: "English", NativeName: "English"},
+	{Code: "hi", Name: "Hindi", NativeName: "हिन्दी", Redirect: "चलिए, हम अपनी पढ़ाई पर वापस आते हैं।"},
+	{Code: "mr", Name: "Marathi", NativeName: "मराठी", Redirect: "चला, आपण अभ्यासाकडे परत येऊया."},
+	{Code: "bn", Name: "Bengali", NativeName: "বাংলা", Redirect: "চলো, আমরা পড়াশোনায় ফিরে যাই।"},
+	{Code: "ta", Name: "Tamil", NativeName: "தமிழ்", Redirect: "வாங்க, நாம் படிப்புக்குத் திரும்புவோம்."},
+	{Code: "te", Name: "Telugu", NativeName: "తెలుగు", Redirect: "రండి, మన చదువుకు తిరిగి వద్దాం."},
+	{Code: "gu", Name: "Gujarati", NativeName: "ગુજરાતી", Redirect: "ચાલો, આપણે અભ્યાસ પર પાછા ફરીએ."},
+	{Code: "kn", Name: "Kannada", NativeName: "ಕನ್ನಡ", Redirect: "ಬನ್ನಿ, ನಾವು ಓದಿನ ಕಡೆಗೆ ಮರಳೋಣ."},
+	{Code: "ml", Name: "Malayalam", NativeName: "മലയാളം", Redirect: "വരൂ, നമുക്ക് പഠനത്തിലേക്ക് മടങ്ങാം."},
+	{Code: "en", Name: "English", NativeName: "English", Redirect: "Let's get back to our lesson."},
 }
 
 // Languages returns the supported languages in display order. The caller may modify the result.

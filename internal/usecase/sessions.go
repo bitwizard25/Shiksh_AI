@@ -26,6 +26,7 @@ type SessionsDeps struct {
 	Tx        TxManager
 	Opaque    OpaqueTokens
 	Summaries *Summaries // may be nil: summaries are then skipped
+	Live      LiveSessions // may be nil: no realtime role in this process
 }
 
 // SessionsConfig holds the interactor's settings.
@@ -138,6 +139,9 @@ func (s *Sessions) End(ctx context.Context, userID, sessionID uuid.UUID) error {
 	sess, err := s.owned(ctx, userID, sessionID)
 	if err != nil {
 		return err
+	}
+	if s.d.Live != nil && s.d.Live.End(sessionID) {
+		return nil // the live session finishes itself: it saves what the learner heard, ends and summarizes
 	}
 	ended, err := s.d.Sessions.End(ctx, sessionID, entity.EndLearner, s.now())
 	if err != nil {

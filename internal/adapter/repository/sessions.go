@@ -138,3 +138,106 @@ func scanSession(row pgx.Row) (entity.TutoringSession, error) {
 	}
 	return s, err
 }
+
+var _ usecase.TurnStore = (*Turns)(nil)
+
+// Turns implements usecase.TurnStore. Fenced writes are single statements that match the
+// connection epoch in their WHERE clause, so a replaced connection can never write.
+type Turns struct{ pool *pgxpool.Pool }
+
+func NewTurns(pool *pgxpool.Pool) *Turns { return &Turns{pool: pool} }
+
+func (r *Turns) Connect(ctx context.Context, id uuid.UUID, now time.Time) (int, error) {
+	var epoch int
+	err := database.Conn(ctx, r.pool).QueryRow(ctx, `
+		UPDATE tutoring_sessions
+		SET conn_epoch = conn_epoch + 1, status = 'active', started_at = coalesce(started_at, $2), last_active_at = $2
+		WHERE id = $1 AND status <> 'ended'
+		RETURNING conn_epoch`, id, now).Scan(&epoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, entity.ErrNotFound
+	}
+	return epoch, err
+}
+
+func (r *Turns) MaxTurnNo(ctx context.Context, id uuid.UUID) (int, error) {
+	var n int
+	err := database.Conn(ctx, r.pool).QueryRow(ctx, `SELECT coalesce(max(turn_no), 0) FROM messages WHERE session_id = $1`, id).Scan(&n)
+	return n, err
+}
+
+func (r *Turns) InsertTurn(ctx context.Context, id uuid.UUID, epoch int, t usecase.TurnInsert, now time.Time) error {
+	tag, err := database.Conn(ctx, r.pool).Exec(ctx, `
+		WITH s AS (
+			UPDATE tutoring_sessions SET turn_count = turn_count + 1, last_active_at = $3
+			WHERE id = $1 AND conn_epoch = $2 RETURNING id
+		), l AS (
+			INSERT INTO messages (session_id, turn_no, role, input_mode, content, status, audio_ms, latency, created_at)
+			SELECT s.id, $4, 'learner', nullif($5, ''), $6, $7, $8, $9::jsonb, $3 FROM s
+		)
+		INSERT INTO messages (session_id, turn_no, role, content, status, latency, created_at)
+		SELECT s.id, $4, 'tutor', $10, $11, $12::jsonb, $3 FROM s`,
+		id, epoch, now, t.TurnNo,
+		t.Learner.InputMode, t.Learner.Content, orComplete(t.Learner.Status), t.Learner.AudioMs, jsonOrNil(t.Learner.Latency),
+		t.Tutor.Content, orComplete(t.Tutor.Status), jsonOrNil(t.Tutor.Latency))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return entity.ErrFenced
+	}
+	return nil
+}
+
+func (r *Turns) UpdateTutor(ctx context.Context, id uuid.UUID, epoch, turnNo int, content, status string) error {
+	db := database.Conn(ctx, r.pool)
+	tag, err := db.Exec(ctx, `
+		UPDATE messages m SET content = $4, status = $5
+		FROM tutoring_sessions s
+		WHERE s.id = $1 AND s.conn_epoch = $2 AND m.session_id = s.id AND m.turn_no = $3 AND m.role = 'tutor'`,
+		id, epoch, turnNo, content, status)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	var current int
+	if err := db.QueryRow(ctx, `SELECT conn_epoch FROM tutoring_sessions WHERE id = $1`, id).Scan(&current); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return entity.ErrNotFound
+		}
+		return err
+	}
+	if current != epoch {
+		return entity.ErrFenced
+	}
+	return entity.ErrNotFound
+}
+
+func (r *Turns) Touch(ctx context.Context, id uuid.UUID, epoch int, now time.Time) error {
+	tag, err := database.Conn(ctx, r.pool).Exec(ctx,
+		`UPDATE tutoring_sessions SET last_active_at = $3 WHERE id = $1 AND conn_epoch = $2`, id, epoch, now)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return entity.ErrFenced
+	}
+	return nil
+}
+
+func orComplete(status string) string {
+	if status == "" {
+		return entity.MessageComplete
+	}
+	return status
+}
+
+// jsonOrNil passes empty JSON as SQL NULL.
+func jsonOrNil(b []byte) any {
+	if len(b) == 0 {
+		return nil
+	}
+	return string(b)
+}
