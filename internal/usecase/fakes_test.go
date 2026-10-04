@@ -358,3 +358,22 @@ func mustRegister(t *testing.T, e *env) (entity.User, usecase.TokenPair) {
 	}
 	return user, pair
 }
+
+func (m *memTokens) PurgeExpired(_ context.Context, now time.Time) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var n int64
+	for k, t := range m.refresh {
+		if t.ExpiresAt.Before(now) {
+			delete(m.refresh, k)
+			n++
+		}
+	}
+	for k, r := range m.resets {
+		if r.expiresAt.Before(now) {
+			delete(m.resets, k)
+			n++
+		}
+	}
+	return n, nil
+}

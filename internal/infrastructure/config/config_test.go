@@ -116,3 +116,20 @@ func TestLoadDotEnvMissingFileIsNotAnError(t *testing.T) {
 		t.Fatalf("LoadDotEnv(missing) = %v, want nil", err)
 	}
 }
+
+func TestLoadFromSessionSettings(t *testing.T) {
+	cfg, err := config.LoadFrom(baseEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WSTicketTTL != time.Minute || cfg.SessionResumeGrace != 5*time.Minute || cfg.SweepInterval != time.Minute || cfg.WSURL != "ws://localhost:8080/v1/ws" {
+		t.Errorf("defaults = %v %v %v %q", cfg.WSTicketTTL, cfg.SessionResumeGrace, cfg.SweepInterval, cfg.WSURL)
+	}
+	for key, bad := range map[string]string{"WS_URL": "https://example.com/ws", "WS_TICKET_TTL": "0s", "SESSION_RESUME_GRACE": "-1m", "SWEEP_INTERVAL": "0s"} {
+		env := baseEnv()
+		env[key] = bad
+		if _, err := config.LoadFrom(env); err == nil {
+			t.Errorf("%s=%q accepted", key, bad)
+		}
+	}
+}

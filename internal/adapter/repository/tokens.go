@@ -101,3 +101,17 @@ func scanRefresh(row pgx.Row) (entity.RefreshToken, error) {
 	err := row.Scan(&t.UserID, &t.FamilyID, &t.ExpiresAt, &t.UsedAt, &t.RevokedAt)
 	return t, err
 }
+
+// PurgeExpired deletes refresh and reset tokens that expired before now.
+func (r *Tokens) PurgeExpired(ctx context.Context, now time.Time) (int64, error) {
+	db := database.Conn(ctx, r.pool)
+	a, err := db.Exec(ctx, `DELETE FROM refresh_tokens WHERE expires_at < $1`, now)
+	if err != nil {
+		return 0, err
+	}
+	b, err := db.Exec(ctx, `DELETE FROM password_reset_tokens WHERE expires_at < $1`, now)
+	if err != nil {
+		return a.RowsAffected(), err
+	}
+	return a.RowsAffected() + b.RowsAffected(), nil
+}

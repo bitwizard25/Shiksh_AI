@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -26,7 +27,16 @@ type Config struct {
 	AppBaseURL      string        `env:"APP_BASE_URL" envDefault:"http://localhost:3000"`
 	LogLevel        string        `env:"LOG_LEVEL" envDefault:"info"`
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT" envDefault:"20s"`
-	SMTP            SMTPConfig
+
+	// WSURL is the public WebSocket URL handed to clients along with a ticket.
+	WSURL string `env:"WS_URL" envDefault:"ws://localhost:8080/v1/ws"`
+	// WSTicketTTL is how long a WebSocket ticket can be redeemed.
+	WSTicketTTL time.Duration `env:"WS_TICKET_TTL" envDefault:"60s"`
+	// SessionResumeGrace is how long a session may sit idle before the sweeper ends it.
+	SessionResumeGrace time.Duration `env:"SESSION_RESUME_GRACE" envDefault:"5m"`
+	// SweepInterval is how often the worker role sweeps stale sessions and expired tokens.
+	SweepInterval time.Duration `env:"SWEEP_INTERVAL" envDefault:"60s"`
+	SMTP          SMTPConfig
 }
 
 // SMTPConfig configures outgoing mail. An empty Host means mail is logged instead of sent.
@@ -64,6 +74,12 @@ func (c Config) Validate() error {
 	}
 	if c.AccessTokenTTL <= 0 || c.RefreshTokenTTL <= 0 {
 		errs = append(errs, errors.New("ACCESS_TOKEN_TTL and REFRESH_TOKEN_TTL must be positive"))
+	}
+	if c.WSTicketTTL <= 0 || c.SessionResumeGrace <= 0 || c.SweepInterval <= 0 {
+		errs = append(errs, errors.New("WS_TICKET_TTL, SESSION_RESUME_GRACE and SWEEP_INTERVAL must be positive"))
+	}
+	if u, err := url.Parse(c.WSURL); err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" {
+		errs = append(errs, fmt.Errorf("WS_URL %q must be an absolute ws:// or wss:// URL", c.WSURL))
 	}
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(c.LogLevel)); err != nil {

@@ -17,3 +17,6 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string { return e.Field + ": " + e.Message }
+
+// ErrSessionEnded is returned when an operation needs a live session but it is already over.
+var ErrSessionEnded = errors.New("session has ended")

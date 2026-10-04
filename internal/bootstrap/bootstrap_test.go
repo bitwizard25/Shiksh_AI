@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
@@ -47,6 +48,78 @@ func TestAPIHandlerIsFullyWired(t *testing.T) {
 	}
 }
 
+func TestAPIHandlerServesSessions(t *testing.T) {
+	srv := httptest.NewServer(testApp(t).apiHandler())
+	defer srv.Close()
+	post := func(path, auth, body string) *http.Response {
+		req, _ := http.NewRequest("POST", srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if auth != "" {
+			req.Header.Set("Authorization", "Bearer "+auth)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	resp := post("/v1/auth/register", "", `{"email":"asha@example.com","password":"correct horse","display_name":"Asha","terms_accepted":true}`)
+	var reg struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&reg)
+	resp.Body.Close()
+
+	resp = post("/v1/sessions", reg.AccessToken, `{"subject":"math"}`)
+	defer resp.Body.Close()
+	var out struct {
+		WS struct{ URL, Ticket string } `json:"ws"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	if resp.StatusCode != http.StatusCreated || out.WS.Ticket == "" || out.WS.URL != "ws://localhost:8080/v1/ws" {
+		t.Fatalf("create session = %d %+v", resp.StatusCode, out)
+	}
+}
+
+func TestWorkerRoleSweepsStaleSessions(t *testing.T) {
+	a := testApp(t)
+	a.cfg.SweepInterval = 50 * time.Millisecond
+	a.cfg.SessionResumeGrace = time.Minute
+	ctx := context.Background()
+	var userID, sessionID string
+	if err := a.pool.QueryRow(ctx, `INSERT INTO users (email, password_hash, display_name, terms_accepted_at)
+		VALUES ('w@example.com', 'x', 'W', now()) RETURNING id`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.pool.QueryRow(ctx, `INSERT INTO tutoring_sessions (user_id, subject, language, created_at)
+		VALUES ($1, 'math', 'hi', now() - interval '1 hour') RETURNING id`, userID).Scan(&sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- a.Run(runCtx, []Role{RoleWorker}) }()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var status string
+		if err := a.pool.QueryRow(ctx, `SELECT status FROM tutoring_sessions WHERE id = $1`, sessionID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "ended" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("worker did not end the stale session")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+}
+
 func TestRunShutsDownWhenContextIsCancelled(t *testing.T) {
 	a := testApp(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -64,7 +137,7 @@ func TestRunShutsDownWhenContextIsCancelled(t *testing.T) {
 }
 
 func TestRunRejectsUnimplementedRole(t *testing.T) {
-	if err := testApp(t).Run(context.Background(), []Role{"worker"}); err == nil {
+	if err := testApp(t).Run(context.Background(), []Role{"realtime"}); err == nil {
 		t.Fatal("Run accepted a role it cannot start")
 	}
 }

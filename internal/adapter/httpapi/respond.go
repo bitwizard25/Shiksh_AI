@@ -86,6 +86,8 @@ func serviceError(log *slog.Logger, w http.ResponseWriter, r *http.Request, err 
 		writeError(w, r, http.StatusUnauthorized, "invalid_credentials", "email or password is incorrect")
 	case errors.Is(err, entity.ErrTokenInvalid):
 		writeError(w, r, http.StatusUnauthorized, "invalid_token", "token is invalid or expired")
+	case errors.Is(err, entity.ErrSessionEnded):
+		writeError(w, r, http.StatusConflict, "session_ended", "this session has ended")
 	case errors.Is(err, entity.ErrNotFound):
 		writeError(w, r, http.StatusNotFound, "not_found", "resource not found")
 	case errors.Is(err, context.Canceled):

@@ -1240,3 +1240,5 @@ flowchart LR
 - **Plan 1** uses the Clean layout, `TxManager`, `usecase` interactors tested on fakes, the architecture test, `shiksha serve|migrate` with the `api` role, and the in-memory rate limiter behind a port.
 - **Plan 3** adds River (the `worker` role) and the LISTEN/NOTIFY bus. It moves the password-reset email to a `send_email` job enqueued in the reset transaction, and replaces the sweeper goroutine with periodic jobs.
 - **Plan 4** adds the `realtime` role, which subscribes to the bus.
+
+**Plan 3 as built (2026-10-04):** sessions, tickets, prompt, history, summarizer and sweeper are in, with the sweeper running in the `worker` role as a loop. River and the LISTEN/NOTIFY bus are deferred to Plan 4, where the `realtime` role first needs them. Plan 2 (gateways) has not been built yet, so summaries have no `TextGenerator` and stay off. `Sessions.Connect` and the epoch-fenced `InsertTurn` also move to Plan 4, since only the actor uses them.

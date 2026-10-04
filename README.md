@@ -20,7 +20,8 @@ The code follows classic **Clean Architecture** layers. Source dependencies poin
 The same binary runs as different **roles**, so each part scales on its own. Coordination goes only through Postgres; no Redis is needed.
 
 ```bash
-shiksha serve --roles=api      # stateless REST API (this plan)
+shiksha serve --roles=api      # stateless REST API
+shiksha serve --roles=worker   # sweeper: ends abandoned sessions, purges expired tokens
 shiksha serve                  # every role in this build (local dev)
 shiksha migrate                # apply migrations and exit (release step)
 ```
@@ -30,10 +31,14 @@ shiksha migrate                # apply migrations and exit (release step)
 | Plan | Scope | State |
 |---|---|---|
 | 1 | Clean skeleton, Postgres, accounts API, admin endpoints, `api` role | ✅ this branch |
-| 2 | Bhashini ASR/TTS + Gemini gateways, latency benchmark gate | next |
-| 3 | Tutoring sessions, prompts, summaries; `worker` role (River jobs), LISTEN/NOTIFY bus | planned |
+| 2 | Bhashini ASR/TTS + Gemini gateways, latency benchmark gate | next (not started) |
+| 3 | Tutoring sessions and tickets, prompt builder, history, summaries, sweeper in a `worker` role | ✅ this branch (see note) |
 | 4 | `realtime` role: WebSocket voice core (turn pipeline, barge-in) | planned |
 | 5 | Latency polish, hardening, protocol docs | planned |
+
+**Plan 3 note.** Two things are deliberately not in yet:
+- **No LLM gateway:** that is Plan 2. Session summaries need one, so they stay off (a startup warning says so) until Plan 2 supplies a `usecase.TextGenerator`. The summarizer itself is built and tested against a fake.
+- **No River or LISTEN/NOTIFY bus:** the sweeper is a plain loop in the `worker` role, safe across instances because every step is one conditional SQL statement. River (transactional `send_email`) and the bus are only needed once the `realtime` role exists, so they move to Plan 4.
 
 ## Run locally (Windows, no Docker)
 
@@ -98,7 +103,11 @@ go test -race ./...
 | POST | `/v1/auth/password/forgot` | – |
 | POST | `/v1/auth/password/reset` | – |
 | GET / PATCH / DELETE | `/v1/me` | Bearer |
-| GET | `/v1/languages` | – |
+| GET | `/v1/languages`, `/v1/subjects` | – |
+| POST / GET | `/v1/sessions` (create, list with `limit` and `cursor`) | Bearer |
+| GET | `/v1/sessions/{id}` (session and messages) | Bearer |
+| POST | `/v1/sessions/{id}/ticket` (reconnect ticket; 409 if ended) | Bearer |
+| POST | `/v1/sessions/{id}/end` (202; idempotent) | Bearer |
 | GET | `:9090/healthz`, `:9090/readyz`, `:9090/metrics` | – |
 
 Errors use `{"error":{"code","message","field?","request_id"}}`.

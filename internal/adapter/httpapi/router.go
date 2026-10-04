@@ -13,6 +13,8 @@ import (
 type Options struct {
 	Auth           *usecase.Auth
 	Accounts       *usecase.Accounts
+	Sessions       *usecase.Sessions
+	WSURL          string // public WebSocket URL returned with tickets, e.g. wss://api.example.com/v1/ws
 	Limits         Limits
 	Log            *slog.Logger
 	AllowedOrigins []string
@@ -23,6 +25,8 @@ type Options struct {
 type API struct {
 	auth       *usecase.Auth
 	accounts   *usecase.Accounts
+	sessions   *usecase.Sessions
+	wsURL      string
 	limits     Limits
 	log        *slog.Logger
 	trustProxy bool
@@ -30,7 +34,7 @@ type API struct {
 
 // New returns the public API handler with middleware applied.
 func New(opts Options) http.Handler {
-	a := &API{auth: opts.Auth, accounts: opts.Accounts, limits: opts.Limits, log: opts.Log, trustProxy: opts.TrustProxy}
+	a := &API{auth: opts.Auth, accounts: opts.Accounts, sessions: opts.Sessions, wsURL: opts.WSURL, limits: opts.Limits, log: opts.Log, trustProxy: opts.TrustProxy}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/auth/register", a.handleRegister)
@@ -43,6 +47,12 @@ func New(opts Options) http.Handler {
 	mux.HandleFunc("PATCH /v1/me", a.requireAuth(a.handlePatchMe))
 	mux.HandleFunc("DELETE /v1/me", a.requireAuth(a.handleDeleteMe))
 	mux.HandleFunc("GET /v1/languages", a.handleLanguages)
+	mux.HandleFunc("GET /v1/subjects", a.handleSubjects)
+	mux.HandleFunc("POST /v1/sessions", a.requireAuth(a.handleCreateSession))
+	mux.HandleFunc("GET /v1/sessions", a.requireAuth(a.handleListSessions))
+	mux.HandleFunc("GET /v1/sessions/{id}", a.requireAuth(a.handleGetSession))
+	mux.HandleFunc("POST /v1/sessions/{id}/ticket", a.requireAuth(a.handleSessionTicket))
+	mux.HandleFunc("POST /v1/sessions/{id}/end", a.requireAuth(a.handleEndSession))
 
 	var h http.Handler = mux
 	h = cors(opts.AllowedOrigins)(h)

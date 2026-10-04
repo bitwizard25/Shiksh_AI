@@ -35,6 +35,9 @@ type App struct {
 	cfg  config.Config
 	log  *slog.Logger
 	pool *pgxpool.Pool
+
+	summariesOnce sync.Once
+	summaries     *usecase.Summaries
 }
 
 // New connects to the database. Call Close when done.
@@ -61,8 +64,18 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 		Handler:           httpapi.NewAdminHandler(a.pool, &ready),
 		ReadHeaderTimeout: 5 * time.Second,
 	}}
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
+	var workers sync.WaitGroup
 	for _, role := range roles {
 		switch role {
+		case RoleWorker:
+			sweeper := a.sweeper()
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				sweeper.Run(workerCtx, a.cfg.SweepInterval)
+			}()
 		case RoleAPI:
 			servers = append(servers, &http.Server{
 				Addr:              a.cfg.HTTPAddr,
@@ -106,6 +119,10 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 		errs = append(errs, s.Shutdown(shutdownCtx))
 	}
 	wg.Wait()
+	stopWorkers()
+	workers.Wait()
+	// Summaries queued by in-flight requests and the sweeper finish before the pool closes.
+	errs = append(errs, a.summariesService().Wait(shutdownCtx))
 	close(errCh)
 	for err := range errCh {
 		errs = append(errs, err)
@@ -133,9 +150,20 @@ func (a *App) apiHandler() http.Handler {
 		ResetTTL:          passwordResetTTL,
 		AppBaseURL:        a.cfg.AppBaseURL,
 	})
+	sessions := usecase.NewSessions(usecase.SessionsDeps{
+		Users:     users,
+		Sessions:  repository.NewSessions(a.pool),
+		Messages:  repository.NewMessages(a.pool),
+		Tickets:   repository.NewTickets(a.pool),
+		Tx:        database.NewTxManager(a.pool),
+		Opaque:    crypto.Opaque{},
+		Summaries: a.summariesService(),
+	}, usecase.SessionsConfig{TicketTTL: a.cfg.WSTicketTTL}, nil)
 	return httpapi.New(httpapi.Options{
 		Auth:     auth,
 		Accounts: usecase.NewAccounts(users, hasher, nil),
+		Sessions: sessions,
+		WSURL:    a.cfg.WSURL,
 		Limits: httpapi.DefaultLimits(func(interval time.Duration, burst int) httpapi.RateLimiter {
 			return ratelimit.NewMemory(interval, burst)
 		}),
@@ -143,6 +171,27 @@ func (a *App) apiHandler() http.Handler {
 		AllowedOrigins: a.cfg.AllowedOrigins,
 		TrustProxy:     a.cfg.TrustProxy,
 	})
+}
+
+// summariesService returns the process-wide session summarizer, built on first use.
+// Plan 2 supplies the LLM gateway; until then there is no text generator, so summaries are off.
+func (a *App) summariesService() *usecase.Summaries {
+	a.summariesOnce.Do(func() {
+		a.log.Warn("no LLM gateway is configured; session summaries are disabled")
+		a.summaries = usecase.NewSummaries(repository.NewSessions(a.pool), repository.NewMessages(a.pool), nil, a.log)
+	})
+	return a.summaries
+}
+
+// sweeper wires the worker role's periodic cleanup.
+func (a *App) sweeper() *usecase.Sweeper {
+	return usecase.NewSweeper(usecase.SweeperDeps{
+		Sessions:  repository.NewSessions(a.pool),
+		Tickets:   repository.NewTickets(a.pool),
+		Tokens:    repository.NewTokens(a.pool),
+		Summaries: a.summariesService(),
+		Log:       a.log,
+	}, a.cfg.SessionResumeGrace, nil)
 }
 
 func (a *App) mailer() usecase.Mailer {

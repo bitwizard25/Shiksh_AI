@@ -130,3 +130,36 @@ func TestRefreshTokenIsReplay(t *testing.T) {
 		}
 	}
 }
+
+func TestSubjects(t *testing.T) {
+	subs := entity.Subjects()
+	if len(subs) != 10 || subs[0].Code != "math" {
+		t.Fatalf("subjects = %v", subs)
+	}
+	subs[0].Code = "changed"
+	if entity.Subjects()[0].Code != "math" {
+		t.Fatal("Subjects returned shared state")
+	}
+	if err := entity.ValidateSubject("physics"); err != nil {
+		t.Fatal(err)
+	}
+	var ve *entity.ValidationError
+	if err := entity.ValidateSubject("astrology"); !errors.As(err, &ve) || ve.Field != "subject" {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSessionAndMessageRules(t *testing.T) {
+	if (entity.TutoringSession{TurnCount: 1}).NeedsSummary() || !(entity.TutoringSession{TurnCount: 2}).NeedsSummary() {
+		t.Fatal("NeedsSummary threshold is not 2 turns")
+	}
+	if !(entity.TutoringSession{Status: entity.SessionEnded}).Ended() || (entity.TutoringSession{Status: entity.SessionActive}).Ended() {
+		t.Fatal("Ended")
+	}
+	if (entity.Message{Role: entity.RoleTutor, Status: entity.MessageFailed}).Heard() {
+		t.Fatal("a failed tutor message was heard")
+	}
+	if !(entity.Message{Role: entity.RoleTutor, Status: entity.MessageInterrupted}).Heard() || !(entity.Message{Role: entity.RoleLearner, Status: entity.MessageFailed}).Heard() {
+		t.Fatal("Heard is too strict")
+	}
+}
