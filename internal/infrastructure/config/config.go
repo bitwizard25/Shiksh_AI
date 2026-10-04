@@ -37,6 +37,28 @@ type Config struct {
 	// SweepInterval is how often the worker role sweeps stale sessions and expired tokens.
 	SweepInterval time.Duration `env:"SWEEP_INTERVAL" envDefault:"60s"`
 	SMTP          SMTPConfig
+
+	// Providers selects the speech and language gateways: "real" (Bhashini and Gemini, Plan 2) or "fake".
+	Providers string `env:"PROVIDERS" envDefault:"real"`
+	Voice     VoiceConfig
+}
+
+// VoiceConfig holds the realtime tunables (spec §14).
+type VoiceConfig struct {
+	ASRTimeout         time.Duration `env:"ASR_TIMEOUT" envDefault:"4s"`
+	TTSTimeout         time.Duration `env:"TTS_TIMEOUT" envDefault:"4s"`
+	LLMFirstToken      time.Duration `env:"LLM_FIRST_TOKEN_TIMEOUT" envDefault:"4s"`
+	TTSParallelism     int           `env:"TTS_PARALLELISM" envDefault:"3"`
+	FillerAfter        time.Duration `env:"FILLER_AFTER" envDefault:"1s"` // 0 turns fillers off
+	FirstMinRunes      int           `env:"FIRST_MIN_RUNES" envDefault:"20"`
+	MinUtterance       time.Duration `env:"MIN_UTTERANCE" envDefault:"250ms"`
+	MaxUtterance       time.Duration `env:"MAX_UTTERANCE" envDefault:"30s"`
+	ContinuationWindow time.Duration `env:"CONTINUATION_WINDOW" envDefault:"2s"`
+	IdleTimeout        time.Duration `env:"IDLE_TIMEOUT" envDefault:"3m"`
+	MaxSessionDuration time.Duration `env:"MAX_SESSION_DURATION" envDefault:"45m"`
+	TurnRatePerMin     int           `env:"TURN_RATE_PER_MIN" envDefault:"30"`
+	TurnBurst          int           `env:"TURN_BURST" envDefault:"3"`
+	HistoryMaxMessages int           `env:"HISTORY_MAX_MESSAGES" envDefault:"20"`
 }
 
 // SMTPConfig configures outgoing mail. An empty Host means mail is logged instead of sent.
@@ -81,6 +103,12 @@ func (c Config) Validate() error {
 	if u, err := url.Parse(c.WSURL); err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" {
 		errs = append(errs, fmt.Errorf("WS_URL %q must be an absolute ws:// or wss:// URL", c.WSURL))
 	}
+	if c.Providers != "real" && c.Providers != "fake" {
+		errs = append(errs, fmt.Errorf("PROVIDERS %q must be real or fake", c.Providers))
+	}
+	if err := c.Voice.validate(); err != nil {
+		errs = append(errs, err)
+	}
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(c.LogLevel)); err != nil {
 		errs = append(errs, fmt.Errorf("LOG_LEVEL %q must be one of debug, info, warn, error", c.LogLevel))
@@ -89,6 +117,34 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: %w", err)
 	}
 	return nil
+}
+
+func (v VoiceConfig) validate() error {
+	var errs []error
+	for name, d := range map[string]time.Duration{
+		"ASR_TIMEOUT": v.ASRTimeout, "TTS_TIMEOUT": v.TTSTimeout, "LLM_FIRST_TOKEN_TIMEOUT": v.LLMFirstToken,
+		"MIN_UTTERANCE": v.MinUtterance, "MAX_UTTERANCE": v.MaxUtterance, "CONTINUATION_WINDOW": v.ContinuationWindow,
+		"IDLE_TIMEOUT": v.IdleTimeout, "MAX_SESSION_DURATION": v.MaxSessionDuration,
+	} {
+		if d <= 0 {
+			errs = append(errs, fmt.Errorf("%s must be positive", name))
+		}
+	}
+	if v.FillerAfter < 0 {
+		errs = append(errs, errors.New("FILLER_AFTER must not be negative"))
+	}
+	if v.MinUtterance >= v.MaxUtterance {
+		errs = append(errs, errors.New("MIN_UTTERANCE must be shorter than MAX_UTTERANCE"))
+	}
+	for name, n := range map[string]int{
+		"TTS_PARALLELISM": v.TTSParallelism, "FIRST_MIN_RUNES": v.FirstMinRunes, "TURN_RATE_PER_MIN": v.TurnRatePerMin,
+		"TURN_BURST": v.TurnBurst, "HISTORY_MAX_MESSAGES": v.HistoryMaxMessages,
+	} {
+		if n <= 0 {
+			errs = append(errs, fmt.Errorf("%s must be positive", name))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // SlogLevel returns the parsed LOG_LEVEL. Validate guarantees it parses.

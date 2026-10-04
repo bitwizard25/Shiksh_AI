@@ -9,20 +9,26 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/bitwizard25/Shiksh_AI/internal/adapter/gateway/fake"
 	"github.com/bitwizard25/Shiksh_AI/internal/adapter/httpapi"
 	"github.com/bitwizard25/Shiksh_AI/internal/adapter/repository"
+	"github.com/bitwizard25/Shiksh_AI/internal/adapter/ws"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/config"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/crypto"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/database"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/mail"
+	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/metrics"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/ratelimit"
 	"github.com/bitwizard25/Shiksh_AI/internal/usecase"
+	"github.com/bitwizard25/Shiksh_AI/internal/usecase/conversation"
 )
 
 const (
@@ -38,6 +44,10 @@ type App struct {
 
 	summariesOnce sync.Once
 	summaries     *usecase.Summaries
+
+	reg   prometheus.Registerer // where the realtime metrics register; nil means a private registry
+	voice *metrics.Voice
+	hub   *conversation.Hub // set by Run when the realtime role is on
 }
 
 // New connects to the database. Call Close when done.
@@ -46,7 +56,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*App, error)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
-	return &App{cfg: cfg, log: log, pool: pool}, nil
+	return &App{cfg: cfg, log: log, pool: pool, reg: prometheus.DefaultRegisterer}, nil
 }
 
 // Close releases the database pool.
@@ -64,11 +74,20 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 		Handler:           httpapi.NewAdminHandler(a.pool, &ready),
 		ReadHeaderTimeout: 5 * time.Second,
 	}}
+	if slices.Contains(roles, RoleRealtime) {
+		hub, err := a.newHub()
+		if err != nil {
+			return err
+		}
+		a.hub = hub
+	}
 	workerCtx, stopWorkers := context.WithCancel(context.Background())
 	defer stopWorkers()
 	var workers sync.WaitGroup
 	for _, role := range roles {
 		switch role {
+		case RoleAPI, RoleRealtime:
+			// Both roles share one listener when they run together; the load balancer splits them in production.
 		case RoleWorker:
 			sweeper := a.sweeper()
 			workers.Add(1)
@@ -76,17 +95,18 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 				defer workers.Done()
 				sweeper.Run(workerCtx, a.cfg.SweepInterval)
 			}()
-		case RoleAPI:
-			servers = append(servers, &http.Server{
-				Addr:              a.cfg.HTTPAddr,
-				Handler:           a.apiHandler(),
-				ReadHeaderTimeout: 10 * time.Second,
-				IdleTimeout:       120 * time.Second,
-				// No WriteTimeout: the realtime role (Plan 4) serves long-lived WebSockets.
-			})
 		default:
 			return fmt.Errorf("role %q is not implemented in this build", role)
 		}
+	}
+	if slices.Contains(roles, RoleAPI) || slices.Contains(roles, RoleRealtime) {
+		servers = append(servers, &http.Server{
+			Addr:              a.cfg.HTTPAddr,
+			Handler:           a.httpHandler(roles),
+			ReadHeaderTimeout: 10 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			// No WriteTimeout: WebSockets are long-lived.
+		})
 	}
 
 	errCh := make(chan error, len(servers))
@@ -115,6 +135,10 @@ func (a *App) Run(ctx context.Context, roles []Role) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), a.cfg.ShutdownTimeout)
 	defer cancel()
 	errs := []error{runErr}
+	if a.hub != nil {
+		// http.Server.Shutdown does not wait for hijacked WebSockets, so live sessions are drained first.
+		errs = append(errs, a.hub.Drain(shutdownCtx))
+	}
 	for _, s := range servers {
 		errs = append(errs, s.Shutdown(shutdownCtx))
 	}
@@ -150,15 +174,7 @@ func (a *App) apiHandler() http.Handler {
 		ResetTTL:          passwordResetTTL,
 		AppBaseURL:        a.cfg.AppBaseURL,
 	})
-	sessions := usecase.NewSessions(usecase.SessionsDeps{
-		Users:     users,
-		Sessions:  repository.NewSessions(a.pool),
-		Messages:  repository.NewMessages(a.pool),
-		Tickets:   repository.NewTickets(a.pool),
-		Tx:        database.NewTxManager(a.pool),
-		Opaque:    crypto.Opaque{},
-		Summaries: a.summariesService(),
-	}, usecase.SessionsConfig{TicketTTL: a.cfg.WSTicketTTL}, nil)
+	sessions := a.sessionsService()
 	return httpapi.New(httpapi.Options{
 		Auth:     auth,
 		Accounts: usecase.NewAccounts(users, hasher, nil),
@@ -192,6 +208,79 @@ func (a *App) sweeper() *usecase.Sweeper {
 		Summaries: a.summariesService(),
 		Log:       a.log,
 	}, a.cfg.SessionResumeGrace, nil)
+}
+
+// sessionsService wires the session use case. With the realtime role in this process, ending a
+// session over REST reaches the live connection through the hub.
+func (a *App) sessionsService() *usecase.Sessions {
+	d := usecase.SessionsDeps{
+		Users:     repository.NewUsers(a.pool),
+		Sessions:  repository.NewSessions(a.pool),
+		Messages:  repository.NewMessages(a.pool),
+		Tickets:   repository.NewTickets(a.pool),
+		Tx:        database.NewTxManager(a.pool),
+		Opaque:    crypto.Opaque{},
+		Summaries: a.summariesService(),
+	}
+	if a.hub != nil {
+		d.Live = a.hub
+	}
+	return usecase.NewSessions(d, usecase.SessionsConfig{TicketTTL: a.cfg.WSTicketTTL}, nil)
+}
+
+// httpHandler serves the public listener: REST for the api role, GET /v1/ws for the realtime role.
+func (a *App) httpHandler(roles []Role) http.Handler {
+	mux := http.NewServeMux()
+	if slices.Contains(roles, RoleAPI) {
+		mux.Handle("/", a.apiHandler())
+	}
+	if a.hub != nil {
+		mux.Handle("GET /v1/ws", ws.NewHandler(ws.Options{
+			Hub: a.hub, Tickets: a.sessionsService(), Log: a.log, AllowedOrigins: a.cfg.AllowedOrigins,
+			Dropped: a.voiceMetrics().OutboxDropped,
+		}))
+	}
+	return mux
+}
+
+func (a *App) voiceMetrics() *metrics.Voice {
+	if a.voice == nil {
+		reg := a.reg
+		if reg == nil {
+			reg = prometheus.NewRegistry()
+		}
+		a.voice = metrics.NewVoice(reg)
+	}
+	return a.voice
+}
+
+// newHub builds the realtime hub: providers, clips, stores and settings.
+func (a *App) newHub() (*conversation.Hub, error) {
+	if a.cfg.Providers != "fake" {
+		return nil, errors.New("PROVIDERS=real is not available yet (the Bhashini and Gemini gateways arrive in Plan 2); set PROVIDERS=fake to run the realtime role")
+	}
+	a.log.Warn("PROVIDERS=fake: speech and language replies are synthetic; do not use in production")
+	asr := &fake.ASR{Delay: 250 * time.Millisecond}
+	llm := &fake.LLM{TTFT: 300 * time.Millisecond, TokenDelay: 20 * time.Millisecond}
+	tts := &fake.TTS{Delay: 150 * time.Millisecond}
+	// Real providers (Plan 2) will use clips.Embedded, generated with `voicecli assets`.
+	v := a.cfg.Voice
+	cfg := conversation.DefaultConfig()
+	cfg.ASRTimeout, cfg.TTSTimeout, cfg.LLMFirstToken = v.ASRTimeout, v.TTSTimeout, v.LLMFirstToken
+	cfg.TTSParallelism, cfg.FillerAfter, cfg.FirstMinRunes = v.TTSParallelism, v.FillerAfter, v.FirstMinRunes
+	cfg.MinUtterance, cfg.MaxUtterance, cfg.ContinuationWindow = v.MinUtterance, v.MaxUtterance, v.ContinuationWindow
+	cfg.IdleTimeout, cfg.MaxSessionDuration = v.IdleTimeout, v.MaxSessionDuration
+	cfg.TurnRatePerMin, cfg.TurnBurst, cfg.HistoryMaxMessages = v.TurnRatePerMin, v.TurnBurst, v.HistoryMaxMessages
+	summaries := a.summariesService()
+	return conversation.NewHub(conversation.Deps{
+		ASR: asr, LLM: llm, TTS: tts, Clips: fake.Clips{},
+		Store:    repository.NewTurns(a.pool),
+		Users:    repository.NewUsers(a.pool),
+		Sessions: repository.NewSessions(a.pool),
+		Messages: repository.NewMessages(a.pool),
+		Cfg:      cfg, Log: a.log, Metrics: a.voiceMetrics(),
+		OnEnded: summaries.Submit,
+	}), nil
 }
 
 func (a *App) mailer() usecase.Mailer {

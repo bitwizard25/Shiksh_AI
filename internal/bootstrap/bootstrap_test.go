@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/config"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/database/dbtest"
 )
@@ -27,6 +29,7 @@ func testApp(t *testing.T) *App {
 		"HTTP_ADDR":        "127.0.0.1:0",
 		"ADMIN_ADDR":       "127.0.0.1:0",
 		"SHUTDOWN_TIMEOUT": "5s",
+		"PROVIDERS":        "fake",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,8 +140,17 @@ func TestRunShutsDownWhenContextIsCancelled(t *testing.T) {
 }
 
 func TestRunRejectsUnimplementedRole(t *testing.T) {
-	if err := testApp(t).Run(context.Background(), []Role{"realtime"}); err == nil {
+	if err := testApp(t).Run(context.Background(), []Role{"bogus"}); err == nil {
 		t.Fatal("Run accepted a role it cannot start")
+	}
+}
+
+func TestRealtimeRoleNeedsFakeProvidersUntilPlan2(t *testing.T) {
+	a := testApp(t)
+	a.cfg.Providers = "real"
+	err := a.Run(context.Background(), []Role{RoleRealtime})
+	if err == nil || !strings.Contains(err.Error(), "PROVIDERS=fake") {
+		t.Fatalf("Run = %v, want an error that points at PROVIDERS=fake", err)
 	}
 }
 
@@ -165,5 +177,117 @@ func TestRunReportsServerStartFailure(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Run did not return after port conflict")
+	}
+}
+
+// TestRealtimeAndAPIShareOneListener runs the whole stack: register and create a session over REST,
+// talk over the WebSocket with fake providers, and end the live session over REST.
+func TestRealtimeAndAPIShareOneListener(t *testing.T) {
+	a := testApp(t)
+	hub, err := a.newHub()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.hub = hub
+	srv := httptest.NewServer(a.httpHandler([]Role{RoleAPI, RoleRealtime}))
+	defer srv.Close()
+
+	call := func(method, path, bearer, body string) (int, []byte) {
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+	_, b := call("POST", "/v1/auth/register", "", `{"email":"asha@example.com","password":"correct horse","display_name":"Asha","terms_accepted":true}`)
+	var reg struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.Unmarshal(b, &reg)
+	code, b := call("POST", "/v1/sessions", reg.AccessToken, `{"subject":"math","language":"en"}`)
+	var created struct {
+		Session struct{ ID string }
+		WS      struct{ Ticket string }
+	}
+	_ = json.Unmarshal(b, &created)
+	if code != http.StatusCreated {
+		t.Fatalf("create session = %d %s", code, b)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/v1/ws?ticket="+created.WS.Ticket,
+		&websocket.DialOptions{Subprotocols: []string{"shiksha.v1"}})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.CloseNow()
+	next := func() map[string]any {
+		typ, data, err := c.Read(ctx)
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		m := map[string]any{"binary": typ == websocket.MessageBinary}
+		if typ == websocket.MessageText {
+			_ = json.Unmarshal(data, &m)
+		}
+		return m
+	}
+	if m := next(); m["type"] != "session.ready" {
+		t.Fatalf("first message = %v", m)
+	}
+	_ = c.Write(ctx, websocket.MessageText, []byte(`{"type":"text.input","text":"what is a fraction"}`))
+	for m := next(); m["type"] != "tutor.done"; m = next() {
+	}
+
+	// Ending over REST reaches the live connection through the hub.
+	if code, _ := call("POST", "/v1/sessions/"+created.Session.ID+"/end", reg.AccessToken, ""); code != http.StatusAccepted {
+		t.Fatalf("end = %d", code)
+	}
+	var ended bool
+	for {
+		typ, data, err := c.Read(ctx)
+		if err != nil {
+			if websocket.CloseStatus(err) != websocket.StatusNormalClosure {
+				t.Fatalf("close = %v (%v)", websocket.CloseStatus(err), err)
+			}
+			break
+		}
+		ended = ended || (typ == websocket.MessageText && strings.Contains(string(data), `"session.ended"`))
+	}
+	if !ended {
+		t.Fatal("the live session was not told it ended")
+	}
+	_, b = call("GET", "/v1/sessions/"+created.Session.ID, reg.AccessToken, "")
+	var detail struct {
+		Session struct {
+			Status    string
+			EndReason string `json:"end_reason"`
+		}
+		Messages []struct{ Role string }
+	}
+	_ = json.Unmarshal(b, &detail)
+	if detail.Session.Status != "ended" || detail.Session.EndReason != "learner" || len(detail.Messages) != 2 {
+		t.Fatalf("session after end = %s", b)
+	}
+}
+
+func TestAPIOnlyHandlerHasNoWebSocketRoute(t *testing.T) {
+	srv := httptest.NewServer(testApp(t).httpHandler([]Role{RoleAPI}))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/v1/ws?ticket=x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 without the realtime role", resp.StatusCode)
 	}
 }

@@ -25,7 +25,7 @@ type SessionsDeps struct {
 	Tickets   TicketRepository
 	Tx        TxManager
 	Opaque    OpaqueTokens
-	Summaries *Summaries // may be nil: summaries are then skipped
+	Summaries *Summaries   // may be nil: summaries are then skipped
 	Live      LiveSessions // may be nil: no realtime role in this process
 }
 

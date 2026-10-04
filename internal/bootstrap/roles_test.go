@@ -8,7 +8,7 @@ import (
 
 func TestParseRoles(t *testing.T) {
 	cases := map[string][]Role{
-		"":           {RoleAPI, RoleWorker},
+		"":           {RoleAPI, RoleRealtime, RoleWorker},
 		"api":        {RoleAPI},
 		" api , api": {RoleAPI},
 		"worker,api": {RoleWorker, RoleAPI},
@@ -19,7 +19,7 @@ func TestParseRoles(t *testing.T) {
 			t.Errorf("ParseRoles(%q) = %v, %v; want %v", in, got, err, want)
 		}
 	}
-	if _, err := ParseRoles("api,realtime"); err == nil || !strings.Contains(err.Error(), `"realtime"`) || !strings.Contains(err.Error(), "api") {
+	if _, err := ParseRoles("api,bogus"); err == nil || !strings.Contains(err.Error(), `"bogus"`) || !strings.Contains(err.Error(), "api") {
 		t.Errorf("unknown role err = %v, want it to name the role and list known roles", err)
 	}
 	if _, err := ParseRoles(" , "); err == nil {

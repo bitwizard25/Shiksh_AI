@@ -149,7 +149,7 @@ func NewSession(p SessionParams) (*Session, error) {
 		events: make(chan any, 256), done: make(chan struct{}),
 		turnNo: p.MaxTurnNo, nextTurnID: uint32(p.MaxTurnNo) + 1, history: p.History,
 		limiter:  newBucket(cfg.TurnBurst, cfg.TurnRatePerMin, p.Deps.Now()),
-		resumed:  p.Session.ConnEpoch > 0 || p.MaxTurnNo > 0,
+		resumed:  p.Epoch > 1 || p.MaxTurnNo > 0, // the epoch was bumped by this very connect, so 1 means first time
 		maxBytes: int(cfg.MaxUtterance/time.Millisecond) * InputSampleRate * bytesPerSample / 1000,
 		minBytes: int(cfg.MinUtterance/time.Millisecond) * InputSampleRate * bytesPerSample / 1000,
 	}, nil
@@ -327,6 +327,7 @@ func (s *Session) handleAudio(pcm []byte) {
 	}
 	s.buf = append(s.buf, pcm...)
 	if len(s.buf) >= s.maxBytes {
+		s.buf = s.buf[:s.maxBytes] // a frame may straddle the limit: never send more than MAX_UTTERANCE
 		s.sendError(ErrUtteranceTooLong, "that was too long, answering what I heard so far", false)
 		s.finishUtterance()
 	}

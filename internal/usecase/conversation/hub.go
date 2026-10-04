@@ -175,6 +175,13 @@ func (h *Hub) End(id uuid.UUID) bool {
 	return true
 }
 
+// Live reports whether a session is connected through this hub.
+func (h *Hub) Live(id uuid.UUID) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.live[id] != nil
+}
+
 // Drain refuses new connections, tells every live session the server is shutting down, and waits
 // for them to save what they have, or until ctx ends.
 func (h *Hub) Drain(ctx context.Context) error {

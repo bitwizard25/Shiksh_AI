@@ -181,7 +181,9 @@ func TestOverlongUtteranceAutoFinalizes(t *testing.T) {
 		h := newHarness(t, func(c *Config) { c.MaxUtterance = time.Second })
 		h.start(t.Context())
 		h.msg(MsgSpeechStart)
-		h.audio(1500)
+		for range 15 {
+			h.s.Audio(make([]byte, 3000)) // 93.75 ms frames, so the limit falls inside a frame
+		}
 		time.Sleep(5 * time.Second)
 		trace := h.out.names()
 		if !contains(trace, "error:utterance_too_long", "turn.started", "transcript") {

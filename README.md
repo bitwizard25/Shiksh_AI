@@ -21,6 +21,7 @@ The same binary runs as different **roles**, so each part scales on its own. Coo
 
 ```bash
 shiksha serve --roles=api      # stateless REST API
+shiksha serve --roles=realtime # WebSocket voice sessions (needs PROVIDERS=fake until Plan 2)
 shiksha serve --roles=worker   # sweeper: ends abandoned sessions, purges expired tokens
 shiksha serve                  # every role in this build (local dev)
 shiksha migrate                # apply migrations and exit (release step)
@@ -33,12 +34,14 @@ shiksha migrate                # apply migrations and exit (release step)
 | 1 | Clean skeleton, Postgres, accounts API, admin endpoints, `api` role | ✅ this branch |
 | 2 | Bhashini ASR/TTS + Gemini gateways, latency benchmark gate | next (not started) |
 | 3 | Tutoring sessions and tickets, prompt builder, history, summaries, sweeper in a `worker` role | ✅ this branch (see note) |
-| 4 | `realtime` role: WebSocket voice core (turn pipeline, barge-in) | planned |
+| 4 | `realtime` role: WebSocket voice core (turn pipeline, barge-in, continuation merge, outbox, hub) | ✅ this branch, on fake providers (see note) |
 | 5 | Latency polish, hardening, protocol docs | planned |
 
-**Plan 3 note.** Two things are deliberately not in yet:
+**Plan 4 note.** The realtime core is complete and tested end to end over a real WebSocket and Postgres, but it runs on **fake providers** only (`PROVIDERS=fake`: a tone for speech, an echoing tutor). Real speech and language need the Plan 2 gateways, so `PROVIDERS=real` refuses to start the realtime role for now. Nothing about latency against real Bhashini or Gemini has been measured.
+
+**Plan 3 note.** Two things were deliberately left out:
 - **No LLM gateway:** that is Plan 2. Session summaries need one, so they stay off (a startup warning says so) until Plan 2 supplies a `usecase.TextGenerator`. The summarizer itself is built and tested against a fake.
-- **No River or LISTEN/NOTIFY bus:** the sweeper is a plain loop in the `worker` role, safe across instances because every step is one conditional SQL statement. River (transactional `send_email`) and the bus are only needed once the `realtime` role exists, so they move to Plan 4.
+- **No River or LISTEN/NOTIFY bus:** the sweeper is a plain loop in the `worker` role, safe across instances because every step is one conditional SQL statement. Plan 4 did not need them either: a connection on another instance is fenced by the database epoch, and `POST /v1/sessions/{id}/end` only reaches a live session hosted by the same process (otherwise it ends the row, and the live connection is fenced on its next write or stopped by the sweeper). They stay on the list for when sessions are spread over many realtime pods.
 
 ## Run locally (Windows, no Docker)
 
@@ -108,6 +111,7 @@ go test -race ./...
 | GET | `/v1/sessions/{id}` (session and messages) | Bearer |
 | POST | `/v1/sessions/{id}/ticket` (reconnect ticket; 409 if ended) | Bearer |
 | POST | `/v1/sessions/{id}/end` (202; idempotent) | Bearer |
+| GET | `/v1/ws?ticket=…` (WebSocket, subprotocol `shiksha.v1`; see [docs/ws-protocol.md](docs/ws-protocol.md)) | ticket |
 | GET | `:9090/healthz`, `:9090/readyz`, `:9090/metrics` | – |
 
 Errors use `{"error":{"code","message","field?","request_id"}}`.

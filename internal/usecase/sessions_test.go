@@ -167,3 +167,40 @@ func TestListPagination(t *testing.T) {
 		t.Fatalf("huge limit returned %d", len(huge.Items))
 	}
 }
+
+type fakeLive struct{ ended []uuid.UUID }
+
+func (f *fakeLive) End(id uuid.UUID) bool {
+	f.ended = append(f.ended, id)
+	return id != uuid.Nil && len(f.ended) == 1
+}
+
+func TestEndGoesToTheLiveSessionWhenThisProcessHostsIt(t *testing.T) {
+	e := newSessionEnv(t)
+	live := &fakeLive{}
+	uc := usecase.NewSessions(usecase.SessionsDeps{
+		Users: e.users, Sessions: e.sessions, Messages: e.messages, Tickets: e.tickets,
+		Tx: noTx{}, Opaque: &fakeOpaque{}, Summaries: e.summaries, Live: live,
+	}, usecase.SessionsConfig{TicketTTL: ticketTTL}, e.clock.Now)
+	user, _ := mustRegister(t, e.env)
+	ctx := context.Background()
+	started, _ := uc.Create(ctx, user.ID, usecase.SessionInput{Subject: "math"})
+	id := started.Session.ID
+
+	if err := uc.End(ctx, user.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	if len(live.ended) != 1 {
+		t.Fatalf("live asked %d times", len(live.ended))
+	}
+	if s, _ := e.sessions.Get(ctx, id); s.Ended() {
+		t.Fatal("the row was ended directly: the live session is the one that ends and saves it")
+	}
+	// Not live here (the fake says false from the second call on): the row is ended directly.
+	if err := uc.End(ctx, user.ID, id); err != nil {
+		t.Fatal(err)
+	}
+	if s, _ := e.sessions.Get(ctx, id); !s.Ended() || s.EndReason != entity.EndLearner {
+		t.Fatalf("session = %+v", s)
+	}
+}
