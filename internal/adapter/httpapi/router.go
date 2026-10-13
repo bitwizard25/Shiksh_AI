@@ -14,6 +14,8 @@ type Options struct {
 	Auth           *usecase.Auth
 	Accounts       *usecase.Accounts
 	Catalog        *usecase.Catalog // nil offers every language as available
+	Sessions       *usecase.Sessions
+	WSURL          string // public WebSocket URL returned with tickets, e.g. wss://api.example.com/v1/ws
 	Limits         Limits
 	Log            *slog.Logger
 	AllowedOrigins []string
@@ -25,6 +27,8 @@ type API struct {
 	auth       *usecase.Auth
 	accounts   *usecase.Accounts
 	catalog    *usecase.Catalog
+	sessions   *usecase.Sessions
+	wsURL      string
 	limits     Limits
 	log        *slog.Logger
 	trustProxy bool
@@ -36,7 +40,10 @@ func New(opts Options) http.Handler {
 	if catalog == nil {
 		catalog = usecase.NewCatalog(nil, nil)
 	}
-	a := &API{auth: opts.Auth, accounts: opts.Accounts, catalog: catalog, limits: opts.Limits, log: opts.Log, trustProxy: opts.TrustProxy}
+	a := &API{
+		auth: opts.Auth, accounts: opts.Accounts, catalog: catalog, sessions: opts.Sessions, wsURL: opts.WSURL,
+		limits: opts.Limits, log: opts.Log, trustProxy: opts.TrustProxy,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/auth/register", a.handleRegister)
@@ -49,6 +56,12 @@ func New(opts Options) http.Handler {
 	mux.HandleFunc("PATCH /v1/me", a.requireAuth(a.handlePatchMe))
 	mux.HandleFunc("DELETE /v1/me", a.requireAuth(a.handleDeleteMe))
 	mux.HandleFunc("GET /v1/languages", a.handleLanguages)
+	mux.HandleFunc("GET /v1/subjects", a.handleSubjects)
+	mux.HandleFunc("POST /v1/sessions", a.requireAuth(a.handleCreateSession))
+	mux.HandleFunc("GET /v1/sessions", a.requireAuth(a.handleListSessions))
+	mux.HandleFunc("GET /v1/sessions/{id}", a.requireAuth(a.handleGetSession))
+	mux.HandleFunc("POST /v1/sessions/{id}/ticket", a.requireAuth(a.handleSessionTicket))
+	mux.HandleFunc("POST /v1/sessions/{id}/end", a.requireAuth(a.handleEndSession))
 
 	var h http.Handler = mux
 	h = cors(opts.AllowedOrigins)(h)

@@ -11,6 +11,7 @@ import (
 	"github.com/bitwizard25/Shiksh_AI/internal/adapter/gateway/bhashini"
 	"github.com/bitwizard25/Shiksh_AI/internal/adapter/gateway/fake"
 	"github.com/bitwizard25/Shiksh_AI/internal/adapter/gateway/gemini"
+	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/clips"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/config"
 	"github.com/bitwizard25/Shiksh_AI/internal/usecase"
 	"github.com/bitwizard25/Shiksh_AI/internal/usecase/conversation"
@@ -25,7 +26,8 @@ type Providers struct {
 	TTS          conversation.TTS
 	LLM          conversation.LLM
 	Availability usecase.LanguageAvailability
-	Warmer       *gateway.Warmer // nil for fake providers (a nil *Warmer is a no-op)
+	Clips        conversation.Clips // pre-recorded fillers and phrases: tones for fake providers, embedded WAVs for real ones
+	Warmer       *gateway.Warmer    // nil for fake providers (a nil *Warmer is a no-op)
 }
 
 // BuildProviders builds fake or real providers from cfg and registers their metrics on reg (nil:
@@ -44,6 +46,7 @@ func BuildProviders(ctx context.Context, cfg config.ProviderConfig, reg promethe
 			TTS:          g.TTS(fake.NewTTS(o)),
 			LLM:          g.LLM(fake.NewLLM(o)),
 			Availability: fake.NewAvailability(cfg.EnabledLanguages),
+			Clips:        fake.Clips{},
 		}, nil
 	case config.ProvidersReal:
 		client := gateway.NewHTTPClient()
@@ -67,6 +70,7 @@ func BuildProviders(ctx context.Context, cfg config.ProviderConfig, reg promethe
 			TTS:          speechGuard.TTS(speech),
 			LLM:          llmGuard.LLM(llm),
 			Availability: speech,
+			Clips:        clips.Embedded(log),
 			Warmer:       gateway.NewWarmer(client, func() []string { return append(speech.Endpoints(), geminiOrigin) }),
 		}, nil
 	default:

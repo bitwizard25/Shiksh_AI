@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/bitwizard25/Shiksh_AI/internal/adapter/repository"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/crypto"
 	"github.com/bitwizard25/Shiksh_AI/internal/infrastructure/database"
@@ -57,6 +59,7 @@ func (c *captureMailer) lastBody(t *testing.T) string {
 type testServer struct {
 	*httptest.Server
 	mailer *captureMailer
+	pool   *pgxpool.Pool
 }
 
 // newTestServer wires the real stack: Postgres repositories, TxManager, crypto and the use cases.
@@ -71,12 +74,17 @@ func newTestServer(t *testing.T) *testServer {
 		Access: crypto.NewJWTIssuer(strings.Repeat("k", 32), 15*time.Minute), Opaque: crypto.Opaque{}, Mailer: m,
 	}, usecase.AuthConfig{RefreshTTL: 720 * time.Hour, RefreshReuseGrace: 20 * time.Second, ResetTTL: 30 * time.Minute, AppBaseURL: "https://app.example"})
 	limits := DefaultLimits(func(interval time.Duration, burst int) RateLimiter { return ratelimit.NewMemory(interval, burst) })
+	sessions := usecase.NewSessions(usecase.SessionsDeps{
+		Users: users, Sessions: repository.NewSessions(pool), Messages: repository.NewMessages(pool),
+		Tickets: repository.NewTickets(pool), Tx: database.NewTxManager(pool), Opaque: crypto.Opaque{},
+	}, usecase.SessionsConfig{TicketTTL: time.Minute}, nil)
 	srv := httptest.NewServer(New(Options{
-		Auth: auth, Accounts: usecase.NewAccounts(users, hasher, nil), Limits: limits,
+		Auth: auth, Accounts: usecase.NewAccounts(users, hasher, nil), Sessions: sessions,
+		WSURL: "wss://api.example/v1/ws", Limits: limits,
 		Log: discardLog, AllowedOrigins: []string{"https://app.example"},
 	}))
 	t.Cleanup(srv.Close)
-	return &testServer{Server: srv, mailer: m}
+	return &testServer{Server: srv, mailer: m, pool: pool}
 }
 
 // do sends a request (body may be a string for raw bodies, or any value to JSON-encode) with an

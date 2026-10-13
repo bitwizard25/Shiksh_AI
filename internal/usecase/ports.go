@@ -58,6 +58,8 @@ type TokenRepository interface {
 	// ConsumePasswordReset marks a valid reset token used and returns its user, or entity.ErrTokenInvalid.
 	ConsumePasswordReset(ctx context.Context, hash []byte, now time.Time) (uuid.UUID, error)
 	InvalidatePasswordResets(ctx context.Context, userID uuid.UUID, now time.Time) error
+	// PurgeExpired deletes refresh and password-reset tokens that expired before now.
+	PurgeExpired(ctx context.Context, now time.Time) (int64, error)
 }
 
 // TxManager runs fn atomically. Repositories called with the ctx passed to fn join the transaction.
@@ -96,4 +98,89 @@ type Message struct {
 // Mailer sends email.
 type Mailer interface {
 	Send(ctx context.Context, m Message) error
+}
+
+// NewSession is the input to SessionRepository.Create.
+type NewSession struct {
+	UserID   uuid.UUID
+	Subject  string
+	Language string
+	Grade    *int
+	Now      time.Time
+}
+
+// SessionCursor marks the last session of a page; the next page starts after it.
+type SessionCursor struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
+}
+
+// SessionRepository persists tutoring sessions.
+type SessionRepository interface {
+	Create(ctx context.Context, s NewSession) (entity.TutoringSession, error)
+	// Get returns entity.ErrNotFound if there is no such session.
+	Get(ctx context.Context, id uuid.UUID) (entity.TutoringSession, error)
+	// List returns the user's sessions newest first, at most limit, starting after the cursor (if any).
+	List(ctx context.Context, userID uuid.UUID, limit int, after *SessionCursor) ([]entity.TutoringSession, error)
+	// End ends a session that is not yet ended and reports whether this call did it.
+	End(ctx context.Context, id uuid.UUID, reason string, now time.Time) (bool, error)
+	// ClaimStale ends up to limit unended sessions whose last activity (or creation) is before cutoff
+	// and returns their ids. It ends and claims in one statement, so concurrent callers never share a session.
+	ClaimStale(ctx context.Context, cutoff time.Time, limit int, now time.Time) ([]uuid.UUID, error)
+	SetSummary(ctx context.Context, id uuid.UUID, summary string) error
+	// RecentSummaries returns up to n summaries of the user's ended sessions in this subject, newest first.
+	RecentSummaries(ctx context.Context, userID uuid.UUID, subject string, n int) ([]string, error)
+}
+
+// MessageRepository reads the conversation of a session.
+type MessageRepository interface {
+	// Recent returns the last n messages in conversation order (oldest first).
+	Recent(ctx context.Context, sessionID uuid.UUID, n int) ([]entity.Message, error)
+	// List returns every message in conversation order.
+	List(ctx context.Context, sessionID uuid.UUID) ([]entity.Message, error)
+}
+
+// TicketRepository persists single-use WebSocket tickets by their hashes.
+type TicketRepository interface {
+	Create(ctx context.Context, userID, sessionID uuid.UUID, hash []byte, expiresAt time.Time) error
+	// Redeem marks a valid ticket for a session that has not ended as used and returns its owner and
+	// session, or entity.ErrTokenInvalid. At most one concurrent caller succeeds.
+	Redeem(ctx context.Context, hash []byte, now time.Time) (userID, sessionID uuid.UUID, err error)
+	// PurgeExpired deletes tickets that expired before now.
+	PurgeExpired(ctx context.Context, now time.Time) (int64, error)
+}
+
+// TextGenerator produces a single completion from a system prompt and a user message. The LLM
+// gateway implements it.
+type TextGenerator interface {
+	Complete(ctx context.Context, system, user string) (string, error)
+}
+
+// TurnInsert is one finished turn: the learner's message and the tutor's reply (the text the learner heard).
+type TurnInsert struct {
+	TurnNo  int
+	Learner entity.Message
+	Tutor   entity.Message
+}
+
+// TurnStore is what the realtime session needs from the database. Every write carries the
+// connection epoch it was made under and fails with entity.ErrFenced once a newer connection exists.
+type TurnStore interface {
+	// Connect marks the session active, bumps its connection epoch and returns the new epoch.
+	// entity.ErrNotFound if the session does not exist or has ended.
+	Connect(ctx context.Context, sessionID uuid.UUID, now time.Time) (epoch int, err error)
+	// MaxTurnNo returns the highest stored turn number, or 0 if there are no messages.
+	MaxTurnNo(ctx context.Context, sessionID uuid.UUID) (int, error)
+	// InsertTurn stores both messages and counts the turn, atomically.
+	InsertTurn(ctx context.Context, sessionID uuid.UUID, epoch int, t TurnInsert, now time.Time) error
+	// UpdateTutor rewrites the tutor message of a turn, for example when the learner interrupted late.
+	UpdateTutor(ctx context.Context, sessionID uuid.UUID, epoch, turnNo int, content, status string) error
+	// Touch records activity so the sweeper leaves the session alone.
+	Touch(ctx context.Context, sessionID uuid.UUID, epoch int, now time.Time) error
+}
+
+// LiveSessions reaches sessions whose WebSocket this process hosts.
+type LiveSessions interface {
+	// End asks a live session to finish as ended by the learner. It reports whether one was live here.
+	End(sessionID uuid.UUID) bool
 }

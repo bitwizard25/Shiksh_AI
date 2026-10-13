@@ -96,3 +96,15 @@ func TestAvailability(t *testing.T) {
 		t.Fatal("availability does not follow the enabled list")
 	}
 }
+
+func TestClipsCoverEveryKind(t *testing.T) {
+	for _, kind := range []conversation.ClipKind{conversation.ClipFiller, conversation.ClipRepeat, conversation.ClipError, conversation.ClipRedirect} {
+		c, ok := fake.Clips{}.Get(kind, "hi")
+		if !ok || c.SampleRate != fake.SampleRate || len(c.PCM) == 0 || len(c.PCM)%2 != 0 {
+			t.Errorf("%s: clip = %d bytes at %d Hz, %v", kind, len(c.PCM), c.SampleRate, ok)
+		}
+	}
+	if _, ok := (fake.Clips{}).Get("unknown", "hi"); ok {
+		t.Error("unknown clip kind returned a clip")
+	}
+}

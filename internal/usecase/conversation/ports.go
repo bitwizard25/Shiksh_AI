@@ -1,5 +1,5 @@
-// Package conversation holds the realtime voice use case. In Plan 2 it declares the ports the
-// speech and language providers implement; the session actor and turn pipeline arrive in Plan 4.
+// Provider ports: the speech and language contracts the gateways implement (Plan 2).
+
 package conversation
 
 import (

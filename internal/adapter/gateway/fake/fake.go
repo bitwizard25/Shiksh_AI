@@ -122,7 +122,7 @@ func (t *TTS) Synthesize(ctx context.Context, req conversation.TTSRequest) (conv
 		return conversation.TTSResult{}, t.opts.TTSErr
 	}
 	ms := min(60*utf8.RuneCountInString(req.Text), 10_000)
-	pcm := tone(SampleRate, ms)
+	pcm := tone(440, SampleRate, ms)
 	return conversation.TTSResult{PCM: pcm, SampleRate: SampleRate, DurationMs: audio.DurationMs(len(pcm), SampleRate, 1)}, nil
 }
 
@@ -139,6 +139,27 @@ func NewAvailability(codes []string) *Availability {
 
 func (a *Availability) Available(code string) bool { return a.enabled[code] }
 
+// Clips plays a distinct short tone for every clip kind in every language, so fillers, repeats,
+// errors and redirects are audible in local runs without generated assets.
+type Clips struct{}
+
+var _ conversation.Clips = Clips{}
+
+var clipTones = map[conversation.ClipKind]struct{ freq, ms int }{
+	conversation.ClipFiller:   {330, 300},
+	conversation.ClipRepeat:   {523, 500},
+	conversation.ClipError:    {196, 500},
+	conversation.ClipRedirect: {392, 500},
+}
+
+func (Clips) Get(kind conversation.ClipKind, _ string) (conversation.Clip, bool) {
+	t, ok := clipTones[kind]
+	if !ok {
+		return conversation.Clip{}, false
+	}
+	return conversation.Clip{PCM: tone(float64(t.freq), SampleRate, t.ms), SampleRate: SampleRate}, true
+}
+
 func lastUserText(req conversation.LLMRequest) string {
 	for i := len(req.Messages) - 1; i >= 0; i-- {
 		if req.Messages[i].Role == conversation.RoleUser {
@@ -148,11 +169,11 @@ func lastUserText(req conversation.LLMRequest) string {
 	return ""
 }
 
-func tone(rate, ms int) []byte {
+func tone(freq float64, rate, ms int) []byte {
 	n := rate * ms / 1000
 	buf := make([]byte, 2*n)
 	for i := range n {
-		v := int16(3000 * math.Sin(2*math.Pi*440*float64(i)/float64(rate)))
+		v := int16(3000 * math.Sin(2*math.Pi*freq*float64(i)/float64(rate)))
 		binary.LittleEndian.PutUint16(buf[2*i:], uint16(v))
 	}
 	return buf

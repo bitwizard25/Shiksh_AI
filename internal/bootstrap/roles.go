@@ -14,8 +14,14 @@ type Role string
 // RoleAPI serves the stateless REST API.
 const RoleAPI Role = "api"
 
-// KnownRoles lists the roles this build can run, in start order. Plan 3 adds "worker"; Plan 4 adds "realtime".
-var KnownRoles = []Role{RoleAPI}
+// RoleRealtime serves the voice WebSocket (GET /v1/ws) and hosts live tutoring sessions.
+const RoleRealtime Role = "realtime"
+
+// RoleWorker runs background work: the sweeper that ends abandoned sessions and purges expired tokens.
+const RoleWorker Role = "worker"
+
+// KnownRoles lists the roles this build can run, in start order.
+var KnownRoles = []Role{RoleAPI, RoleRealtime, RoleWorker}
 
 // ParseRoles parses a comma-separated role list. An empty string means every known role.
 func ParseRoles(s string) ([]Role, error) {

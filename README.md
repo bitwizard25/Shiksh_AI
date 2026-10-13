@@ -20,7 +20,7 @@ flowchart LR
 
 - **Latency target:** the first audio of the reply goes out at most 1.5 s (p50) and 2.5 s (p95) after the learner stops speaking.
 - **How it gets there:** audio streams while the learner talks, the model replies in a stream, the first short clause is spoken early, and TTS runs ahead of playback.
-- **What exists today:** the providers and the benchmark tool. The live voice path arrives in Plan 4.
+- **What exists today:** the providers, the benchmark tool, tutoring sessions and the live voice path over a WebSocket ([docs/ws-protocol.md](docs/ws-protocol.md)). Latency against the real providers has not been measured yet.
 
 ## Supported languages
 
@@ -32,10 +32,10 @@ The code follows classic **Clean Architecture** layers. Source dependencies poin
 
 | Layer | Package | Holds |
 |---|---|---|
-| Entities | `internal/entity` | Enterprise rules: users, emails, languages (with each one's TTS voice and spoken phrases), refresh-token replay rule |
-| Use cases | `internal/usecase` | Interactors (auth, accounts, language catalog) and the ports they need; `usecase/conversation` holds the speech and language ports (ASR, LLM, TTS) |
-| Interface adapters | `internal/adapter` | REST controllers (`httpapi`), Postgres repositories (`repository`), provider gateways (`gateway`: Bhashini, Gemini, simulated providers, and a guard with a concurrency cap, circuit breaker and metrics) |
-| Frameworks & drivers | `internal/infrastructure` | Config, database (pool, TxManager, migrations), crypto, mail, rate limiter, audio (WAV/PCM) |
+| Entities | `internal/entity` | Enterprise rules: users, emails, languages (with each one's TTS voice and spoken phrases), subjects, tutoring sessions and messages, refresh-token replay rule |
+| Use cases | `internal/usecase` | Interactors (auth, accounts, language catalog, sessions and tickets, prompt builder, history, summaries, sweeper) and the ports they need; `usecase/conversation` holds the speech and language ports (ASR, LLM, TTS) and the realtime core (session actor, turn pipeline, segmenter, TTS pool, persister, hub) |
+| Interface adapters | `internal/adapter` | REST controllers (`httpapi`), the voice WebSocket (`ws`: codec, outbox, handler), Postgres repositories (`repository`), provider gateways (`gateway`: Bhashini, Gemini, simulated providers, and a guard with a concurrency cap, circuit breaker and metrics) |
+| Frameworks & drivers | `internal/infrastructure` | Config, database (pool, TxManager, migrations), crypto, mail, rate limiter, audio (WAV/PCM), embedded audio clips, realtime metrics |
 | Composition root | `internal/bootstrap`, `cmd/shiksha` | Wiring and roles |
 | Tools | `cmd/voicecli`, `cmd/devdb` | Provider CLI and latency benchmark; local Postgres for development |
 
@@ -43,11 +43,13 @@ The same binary runs as different **roles**, so each part scales on its own. Coo
 
 ```bash
 shiksha serve --roles=api      # stateless REST API
-shiksha serve                  # every role in this build (currently just api)
+shiksha serve --roles=realtime # WebSocket voice sessions on the configured providers (PROVIDERS=fake or real)
+shiksha serve --roles=worker   # sweeper: ends abandoned sessions, purges expired tokens and tickets
+shiksha serve                  # every role in this build: api,realtime,worker (local dev)
 shiksha migrate                # apply migrations and exit (release step)
 ```
 
-The `worker` role arrives in Plan 3 and the `realtime` (voice WebSocket) role in Plan 4.
+`api` and `realtime` share one listener (`HTTP_ADDR`) when they run in the same process; in production a load balancer sends `/v1/ws` to the realtime pods.
 
 ## Status
 
@@ -55,26 +57,31 @@ The `worker` role arrives in Plan 3 and the `realtime` (voice WebSocket) role in
 |---|---|---|
 | 1 | Clean skeleton, Postgres, accounts API, admin endpoints, `api` role | ✅ done |
 | 2 | Bhashini ASR/TTS + Gemini gateways, provider guard, `voicecli`, latency benchmark gate | ✅ code done; the real-provider latency benchmark is pending API keys |
-| 3 | Tutoring sessions, prompts, summaries; `worker` role (River jobs), LISTEN/NOTIFY bus | next (planned in detail) |
-| 4 | `realtime` role: WebSocket voice core (turn pipeline, barge-in) | planned |
+| 3 | Tutoring sessions and tickets, prompt builder, history, summaries, sweeper in a `worker` role | ✅ done (see note) |
+| 4 | `realtime` role: WebSocket voice core (turn pipeline, barge-in, continuation merge, outbox, hub) | ✅ done; tested end to end on simulated providers (see note) |
 | 5 | Latency polish, hardening, protocol docs | planned |
 
 **Works today:**
 - Accounts: sign-up, sign-in, rotating refresh tokens, password reset, profile, account deletion.
-- The language catalog, which shows each language's availability.
-- The speech and language provider layer (Bhashini and Gemini, or simulated providers), exercised through `voicecli`.
+- The language catalog, which shows each language's availability, and the subject list.
+- Tutoring sessions: create, list, read back with their messages, reconnect tickets and ending; session summaries feed the tutor's memory of earlier sessions.
+- The live voice (or typed) conversation over a WebSocket: streamed replies, barge-in, fillers, reconnects. The protocol is in [docs/ws-protocol.md](docs/ws-protocol.md).
+- The `worker` role's sweeper, which ends abandoned sessions and purges expired tokens and tickets.
+- The speech and language provider layer (Bhashini and Gemini, or simulated providers), used by the realtime role and summaries and exercised directly through `voicecli`.
 
-**Not yet:** tutoring sessions (Plan 3) and the live voice conversation (Plan 4).
+**Plan 4 note.** The realtime core is tested end to end over a real WebSocket and Postgres on the simulated providers (`PROVIDERS=fake`: a tone for speech, a canned tutor reply). With `PROVIDERS=real` it runs on the same guarded Bhashini and Gemini gateways as `voicecli`; a reply that fails before its first token is retried once on `GEMINI_FALLBACK_MODEL`. Latency against the real providers has not been measured yet, and the embedded clips (fillers, "please say that again") are empty until `voicecli assets` generates them.
+
+**Plan 3 note.** No River job queue or LISTEN/NOTIFY bus was needed: the sweeper is a plain loop in the `worker` role, safe across instances because every step is one conditional SQL statement. A connection on another instance is fenced by the database epoch, and `POST /v1/sessions/{id}/end` only reaches a live session hosted by the same process (otherwise it ends the row, and the live connection is fenced on its next write or stopped by the sweeper). They stay on the list for when sessions are spread over many realtime pods. Summaries are written with the providers' LLM on `GEMINI_SUMMARY_MODEL`.
 
 ## Tech stack
 
 - **Language and HTTP:** Go 1.27; standard-library `net/http` routing.
+- **Realtime:** WebSockets through `coder/websocket`; one actor goroutine per live session.
 - **Database:** Postgres through `pgx` v5, with `goose` migrations embedded in the binary.
 - **Auth:** argon2id password hashing and HS256 JWTs (`golang-jwt`); `x/time/rate` limiters.
 - **Speech and language:** Bhashini ULCA (ASR/TTS) over REST; Gemini through Google's `genai` SDK.
 - **Observability:** Prometheus metrics and structured `slog` JSON logs.
 - **Tests:** a real embedded Postgres, so no Docker is needed, and the race detector on every run.
-- **Coming in Plan 3:** River (a Postgres-backed job queue) and Postgres LISTEN/NOTIFY.
 
 ## Run locally (Windows, no Docker)
 
@@ -132,7 +139,7 @@ go test -race ./...
 
 `PROVIDERS=fake` (the default) simulates speech recognition, the tutor model and speech synthesis, so everything runs without keys. `PROVIDERS=real` uses Bhashini (ASR + TTS) and Gemini and needs `BHASHINI_USER_ID`, `BHASHINI_ULCA_API_KEY` and `GEMINI_API_KEY` in `.env`. Use a paid-tier Gemini key: the learners are minors, and paid-tier data is not used for training. `GET /v1/languages` reports `available: false` for a language until Bhashini has resolved both its ASR and TTS models; failed attempts are logged and retried in the background.
 
-Every provider call goes through a guard with three parts:
+The realtime role (live replies) and the session summarizer use these same providers. Every provider call goes through a guard with three parts:
 - **A concurrency cap:** `PROVIDER_MAX_CONCURRENCY`, default 64.
 - **A circuit breaker:** after 5 consecutive failures it fails fast for 15 s, then lets one probe call through.
 - **Prometheus metrics** on `:9090/metrics`.
@@ -162,7 +169,12 @@ The benchmark's p50/p95 results against the latency budget (p50 ≤ 1.5 s, p95 �
 | POST | `/v1/auth/password/forgot` | – |
 | POST | `/v1/auth/password/reset` | – |
 | GET / PATCH / DELETE | `/v1/me` | Bearer |
-| GET | `/v1/languages` (with `available`) | – |
+| GET | `/v1/languages` (with `available`), `/v1/subjects` | – |
+| POST / GET | `/v1/sessions` (create, list with `limit` and `cursor`) | Bearer |
+| GET | `/v1/sessions/{id}` (session and messages) | Bearer |
+| POST | `/v1/sessions/{id}/ticket` (reconnect ticket; 409 if ended) | Bearer |
+| POST | `/v1/sessions/{id}/end` (202; idempotent) | Bearer |
+| GET | `/v1/ws?ticket=…` (WebSocket, subprotocol `shiksha.v1`; see [docs/ws-protocol.md](docs/ws-protocol.md)) | ticket |
 | GET | `:9090/healthz`, `:9090/readyz`, `:9090/metrics` | – |
 
 Errors use `{"error":{"code","message","field?","request_id"}}`.
@@ -180,6 +192,7 @@ Errors use `{"error":{"code","message","field?","request_id"}}`.
   - Rate limits on register, login, refresh, password reset and account deletion.
   - Strict JSON bodies (1 MB cap, unknown fields rejected), and display names that reject control and bidi-override characters.
 - **Secrets:** provider API keys are redacted from logs and error messages, and HTTP redirects are refused so keys are never forwarded to another host.
+- **WebSocket tickets:** single-use and short-lived (`WS_TICKET_TTL`, default 60 s), stored only as hashes, and issued only to the session's owner; browser origins must be in `ALLOWED_ORIGINS`.
 
 ## Upcoming features
 

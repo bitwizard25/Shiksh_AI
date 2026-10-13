@@ -116,3 +116,47 @@ func TestLoadDotEnvMissingFileIsNotAnError(t *testing.T) {
 		t.Fatalf("LoadDotEnv(missing) = %v, want nil", err)
 	}
 }
+
+func TestLoadFromSessionSettings(t *testing.T) {
+	cfg, err := config.LoadFrom(baseEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.WSTicketTTL != time.Minute || cfg.SessionResumeGrace != 5*time.Minute || cfg.SweepInterval != time.Minute || cfg.WSURL != "ws://localhost:8080/v1/ws" {
+		t.Errorf("defaults = %v %v %v %q", cfg.WSTicketTTL, cfg.SessionResumeGrace, cfg.SweepInterval, cfg.WSURL)
+	}
+	for key, bad := range map[string]string{"WS_URL": "https://example.com/ws", "WS_TICKET_TTL": "0s", "SESSION_RESUME_GRACE": "-1m", "SWEEP_INTERVAL": "0s"} {
+		env := baseEnv()
+		env[key] = bad
+		if _, err := config.LoadFrom(env); err == nil {
+			t.Errorf("%s=%q accepted", key, bad)
+		}
+	}
+}
+
+func TestLoadFromVoiceDefaultsAndValidation(t *testing.T) {
+	cfg, err := config.LoadFrom(baseEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := cfg.Voice
+	if cfg.Providers.Mode != config.ProvidersFake || v.ASRTimeout != 4*time.Second || v.TTSParallelism != 3 || v.FillerAfter != time.Second ||
+		v.MinUtterance != 250*time.Millisecond || v.MaxUtterance != 30*time.Second || v.IdleTimeout != 3*time.Minute ||
+		v.MaxSessionDuration != 45*time.Minute || v.HistoryMaxMessages != 20 || v.TurnBurst != 3 || v.TurnRatePerMin != 30 {
+		t.Fatalf("defaults = %+v (providers %q)", v, cfg.Providers.Mode)
+	}
+	ok := baseEnv()
+	ok["PROVIDERS"], ok["FILLER_AFTER"] = "fake", "0s"
+	if cfg, err := config.LoadFrom(ok); err != nil || cfg.Providers.Mode != config.ProvidersFake || cfg.Voice.FillerAfter != 0 {
+		t.Fatalf("fake providers with fillers off: %+v, %v", cfg.Voice, err)
+	}
+	for key, bad := range map[string]string{
+		"PROVIDERS": "gemini", "ASR_TIMEOUT": "0s", "TTS_PARALLELISM": "0", "MIN_UTTERANCE": "1m", "IDLE_TIMEOUT": "-1s", "FILLER_AFTER": "-1s",
+	} {
+		env := baseEnv()
+		env[key] = bad
+		if _, err := config.LoadFrom(env); err == nil {
+			t.Errorf("%s=%q accepted", key, bad)
+		}
+	}
+}

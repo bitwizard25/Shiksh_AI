@@ -1240,3 +1240,14 @@ flowchart LR
 - **Plan 1** uses the Clean layout, `TxManager`, `usecase` interactors tested on fakes, the architecture test, `shiksha serve|migrate` with the `api` role, and the in-memory rate limiter behind a port.
 - **Plan 3** adds River (the `worker` role) and the LISTEN/NOTIFY bus. It moves the password-reset email to a `send_email` job enqueued in the reset transaction, and replaces the sweeper goroutine with periodic jobs.
 - **Plan 4** adds the `realtime` role, which subscribes to the bus.
+
+**Plan 3 as built (2026-10-04):** sessions, tickets, prompt, history, summarizer and sweeper are in, with the sweeper running in the `worker` role as a loop. River and the LISTEN/NOTIFY bus are deferred to Plan 4, where the `realtime` role first needs them. Plan 2 (gateways) has not been built yet, so summaries have no `TextGenerator` and stay off. `Sessions.Connect` and the epoch-fenced `InsertTurn` also move to Plan 4, since only the actor uses them.
+
+**Plan 4 as built (2026-10-04):** the realtime core (§8–§11) is in `usecase/conversation` (actor, turn pipeline, segmenter, TTS pool, persister, hub) and `adapter/ws` (codec, outbox, handler), with scenario tests on `testing/synctest` and an end-to-end test over a real WebSocket and Postgres. Differences from the text above:
+- It runs on fake providers (`adapter/gateway/fake`); Plan 2 is still to do, so `PROVIDERS=real` is refused.
+- The `Transport` interface was not needed: the actor talks to the `Output` port, so tests use a fake output and the outbox is tested against a fake connection.
+- A draining server answers `503` with `Retry-After` instead of `400`, so reconnecting clients keep retrying.
+- Close code `4010` was added for "session ended or not found". The "last frame of the turn" bit is best effort. `first_audio_ms` is when the first audio frame is queued on the server.
+- Late barge-in is skipped once the client has sent `playback.done` for that turn, and a missing `played` on a not-yet-finished turn means nothing was heard.
+- `x/time/rate` and `errgroup` are not used in the use-case layer, because its import allowlist is stdlib, uuid and entity only; a small token bucket and `sync.WaitGroup` replace them.
+- River and the LISTEN/NOTIFY bus were still not needed. The `voicecli` demo and bench harness is Phase 5.
