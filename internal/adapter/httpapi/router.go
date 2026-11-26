@@ -46,6 +46,7 @@ func New(opts Options) http.Handler {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", handleStudentUI)
 	mux.HandleFunc("POST /v1/auth/register", a.handleRegister)
 	mux.HandleFunc("POST /v1/auth/login", a.handleLogin)
 	mux.HandleFunc("POST /v1/auth/refresh", a.handleRefresh)

@@ -334,3 +334,6 @@ func redactHeaders(msg string, headers map[string]string) string {
 	}
 	return msg
 }
+
+// Name identifies this provider in guards, metrics, and errors.
+func (c *Client) Name() string { return provider }
