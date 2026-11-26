@@ -14,7 +14,7 @@ services:
       retries: 30
   api:
     build: .
-    command: ["serve", "--roles=api"]
+    command: ["serve"]
     env_file: .env
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/shiksha?sslmode=disable
